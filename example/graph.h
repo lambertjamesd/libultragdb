@@ -35,7 +35,7 @@
 #define	canvas_putstr(n,fg,bg)	canvas_puts((n), sizeof(n)-1, (fg), (bg))
 
 
-extern	void	putchar(u16, int, int, char);
+extern	void	putchr(u16, int, int, char);
 extern	void	revchar(u16, int, int, char);
 extern	void	putint_h(u16, int, int, int, char);
 extern	void	putint_d(u16, int, int, int);

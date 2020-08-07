@@ -10,17 +10,12 @@
 
 extern  u8      pat[][CHAR_HT];
 
-#if	BMP_DATA
-#include	"bmpdata.c"
-#endif
-
 u16	__color;
 
 /*---------------------------------------------------------------------
                   Display Big character on the screen
   ---------------------------------------------------------------------*/
-void
-bigputc(u16 color, int curs_x, int curs_y, char c, int xsize, int ysize)
+void bigputc(u16 color, int curs_x, int curs_y, char c, int xsize, int ysize)
 {
   int	i, j, k, l, x, y;
   u16	*p;
@@ -76,8 +71,7 @@ bigputc(u16 color, int curs_x, int curs_y, char c, int xsize, int ysize)
 /*---------------------------------------------------------------------
                   Display big character string on the screen
   ---------------------------------------------------------------------*/
-void
-printbig(u16 color, int curs_x, int curs_y, char *s, int xsize, int ysize)
+void printbig(u16 color, int curs_x, int curs_y, char *s, int xsize, int ysize)
 {
     int i;
 
@@ -89,8 +83,7 @@ printbig(u16 color, int curs_x, int curs_y, char *s, int xsize, int ysize)
 /*---------------------------------------------------------------------
                   Display character on the screen
   ---------------------------------------------------------------------*/
-void
-putchar(u16 color, int curs_x, int curs_y, char c)
+void putchr(u16 color, int curs_x, int curs_y, char c)
 {
   int	i, j;
   int	x = curs_x*CHAR_WD;
@@ -101,9 +94,9 @@ putchar(u16 color, int curs_x, int curs_y, char c)
   for (j = 0; j < CHAR_HT; j ++, pc++) {
     for (i = CHAR_WD - 1; i >= 0; i --) {
       if (*pc & (1 << i)) {
-	*p = color;
+	      *p = color;
       } else {
-	*p = BGCOLOR;
+	      *p = BGCOLOR;
       }
       p ++;
     }
@@ -138,16 +131,15 @@ void revchar(u16 color, int curs_x, int curs_y, char c)
 /*---------------------------------------------------------------------
                   Display hex-data on the screen
   ---------------------------------------------------------------------*/
-void
-putint_h(u16 color, int curs_x, int curs_y, int num, char c) {
+void putint_h(u16 color, int curs_x, int curs_y, int num, char c) {
   int	 i, k;
     
   for (i = 0 ; i < c ; i ++) {
     k = num % 16;
     if (k > 9) {
-      putchar(color, curs_x - i, curs_y, k + 'A' - 10);
+      putchr(color, curs_x - i, curs_y, k + 'A' - 10);
     } else {
-      putchar(color, curs_x - i, curs_y, k + '0');
+      putchr(color, curs_x - i, curs_y, k + '0');
     }
     num = num >> 4;
   }    
@@ -156,8 +148,7 @@ putint_h(u16 color, int curs_x, int curs_y, int num, char c) {
 /*---------------------------------------------------------------------
                   Display dec-data on the screen
   ---------------------------------------------------------------------*/
-void
-putint_d(u16 color, int curs_x, int curs_y, int i)
+void putint_d(u16 color, int curs_x, int curs_y, int i)
 {
   char	c;
   int	j;
@@ -171,36 +162,34 @@ putint_d(u16 color, int curs_x, int curs_y, int i)
   }
   
   do {
-    putchar(color, curs_x--, curs_y, (j % 10) + '0');
+    putchr(color, curs_x--, curs_y, (j % 10) + '0');
     j /= 10;
   } while (j > 0);
 
-  putchar(color, curs_x-1, curs_y, ' ');
-  putchar(color, curs_x, curs_y, c); 
+  putchr(color, curs_x-1, curs_y, ' ');
+  putchr(color, curs_x, curs_y, c); 
 
   if (i > -10 && i < 10){
-    putchar(color, curs_x-2, curs_y, ' '); 
+    putchr(color, curs_x-2, curs_y, ' '); 
   }
 }
 
 /*---------------------------------------------------------------------
                   Display string on the screen
   ---------------------------------------------------------------------*/
-void
-printstr(u16 color, int curs_x, int curs_y, char *s)
+void printstr(u16 color, int curs_x, int curs_y, char *s)
 {
     int i;
 
     for (i = 0 ; *s != NULL; i ++) {
-      putchar(color, curs_x + i, curs_y, *s++);
+      putchr(color, curs_x + i, curs_y, *s++);
     }
 }
 
 /*---------------------------------------------------------------------
                   Put a dot on the screen
   ---------------------------------------------------------------------*/
-void
-pset(int x, int y, u16 color)
+void pset(int x, int y, u16 color)
 {
   ((u16 *)osViGetNextFramebuffer())[x + SCREEN_WD*y]=color;
 }
@@ -208,8 +197,7 @@ pset(int x, int y, u16 color)
 /*---------------------------------------------------------------------
                   Make a circle on the screen
   ---------------------------------------------------------------------*/
-void
-circle(int x0, int y0, int r, u16 color)
+void circle(int x0, int y0, int r, u16 color)
 {
   int	x, y, f;
 
@@ -238,8 +226,7 @@ circle(int x0, int y0, int r, u16 color)
 /*---------------------------------------------------------------------
                   Make a line on the screen
   ---------------------------------------------------------------------*/
-void
-line(int x0, int y0, int x1, int y1, u16 color)
+void line(int x0, int y0, int x1, int y1, u16 color)
 {
   int	dx, dy, sx, sy, i, e;
   int	 x = x0;
@@ -295,8 +282,7 @@ line(int x0, int y0, int x1, int y1, u16 color)
 /*---------------------------------------------------------------------
                   Make a box on the screen
   ---------------------------------------------------------------------*/
-void
-box(int x0, int y0, int x1, int y1, u16 color)
+void box(int x0, int y0, int x1, int y1, u16 color)
 {
   line(x0, y0, x1, y0, color);
   line(x0, y0, x0, y1, color);
@@ -307,8 +293,7 @@ box(int x0, int y0, int x1, int y1, u16 color)
 /*---------------------------------------------------------------------
                   Clear the screen
   ---------------------------------------------------------------------*/
-void
-gcls(void)
+void gcls(void)
 {
   int 	i;
   u16	*p;
@@ -326,8 +311,7 @@ gcls(void)
 /*---------------------------------------------------------------------
                   Set Graphic data to tmp buffer 
   ---------------------------------------------------------------------*/
-void
-SetBG(u8 *gr, u16 *gbuf)
+void SetBG(u8 *gr, u16 *gbuf)
 {
   int 	i, j;
 
@@ -339,8 +323,7 @@ SetBG(u8 *gr, u16 *gbuf)
 /*---------------------------------------------------------------------
                   Write Graphic data to buffer from tmp buffer
   ---------------------------------------------------------------------*/
-void
-WriteBG(u8 *gr, u16 *gbuf)
+void WriteBG(u8 *gr, u16 *gbuf)
 {
   int 	i;
   u16	*p;
@@ -354,8 +337,7 @@ WriteBG(u8 *gr, u16 *gbuf)
 /*---------------------------------------------------------------------
                   Display character on the tmp buffer
   ---------------------------------------------------------------------*/
-void
-gputchar(u16 color, int curs_x, int curs_y, char c, u16 *buf)
+void gputchar(u16 color, int curs_x, int curs_y, char c, u16 *buf)
 {
   int	i, j;
   int	x = curs_x*CHAR_WD;
@@ -379,8 +361,7 @@ gputchar(u16 color, int curs_x, int curs_y, char c, u16 *buf)
 /*---------------------------------------------------------------------
                   Display string on the tmp buffer
   ---------------------------------------------------------------------*/
-void
-gprintstr(u16 color, int curs_x, int curs_y, char *s, u16 *buf)
+void gprintstr(u16 color, int curs_x, int curs_y, char *s, u16 *buf)
 {
     int i;
 

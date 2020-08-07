@@ -18,21 +18,23 @@ APP =		debugger.out
 
 TARGETS =	debugger.n64
 
-HFILES =	example/buffer.h \
-	example/display.h \
-	example/graph.h \
+DEBUGGERHFILES = debugger/serial.h
+
+HFILES =	$(DEBUGGERHFILES) example/graph.h \
 	example/nu64sys.h \
 	example/thread.h
 
-CODEFILES   =	example/nu64sys.c \
+DEBUGGERFILES = debugger/serial.c \
+
+
+CODEFILES   = $(DEBUGGERFILES) example/nu64sys.c \
 	example/main.c \
 	example/graph.c \
 	example/asci.c
 
 CODEOBJECTS =	$(CODEFILES:.c=.o)
 
-DATAFILES   =	example/cfb.c \
-	example/buffer.c
+DATAFILES   =	example/cfb.c
 
 DATAOBJECTS =	$(DATAFILES:.c=.o)
 
