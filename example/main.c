@@ -5,6 +5,7 @@
   Comment	   	1M FLASH TEST(ver 1.25 for flash library 7.6)
   ---------------------------------------------------------------------*/
 #include	<ultra64.h>
+#include  <string.h>
 #include	"nu64sys.h"
 #include	"thread.h"
 #include	"graph.h"
@@ -116,6 +117,7 @@ void start_display(void)
   } 
 }
 
+static long long __align;
 static char gTmpBuffer[0x1000];
 
 public	void	mainproc(void *arg)
@@ -134,8 +136,13 @@ public	void	mainproc(void *arg)
   osViBlack(0);
   n_WaitMesg(retrace);
   initcontroller();
-  gdbInitDebugger(handler, &n_dmaMessageQ);
+  enum GDBError err = gdbInitDebugger(handler, &n_dmaMessageQ);
   
+  if (err != GDBErrorNone) {
+    sprintf(gTmpBuffer, "Error initializing debugger %d", err);
+    println(gTmpBuffer);
+  }
+
   lastbutton = 0;
 
   while(1) {
@@ -147,18 +154,38 @@ public	void	mainproc(void *arg)
     enum GDBDataType dataType;
     u32 chunkSize;
 
-    while (gdbPollMessageHeader(&dataType, &chunkSize) == GDBErrorNone) {
-      enum GDBError err = gdbReadMessage(gTmpBuffer, chunkSize);
-      gTmpBuffer[chunkSize] = '\0';
-      println(gTmpBuffer);
+    // while (gdbPollMessageHeader(&dataType, &chunkSize) == GDBErrorNone) {
+    //   enum GDBError err = gdbReadMessage(gTmpBuffer, chunkSize);
+    //   gTmpBuffer[chunkSize] = '\0';
+    //   println(gTmpBuffer);
 
-      if (err != GDBErrorNone) {
-        println("Error reading message");
+    //   if (err != GDBErrorNone) {
+    //     println("Error reading message");
+    //   } else {
+    //     err = gdbSendMessage(dataType, gTmpBuffer, chunkSize);
+    //     if (err != GDBErrorNone) {
+    //       println("Error sending message");
+    //     }
+    //   }
+    // }
+
+    if (gdbSerialCanRead()) {
+      enum GDBError err = gdbSerialRead(gTmpBuffer, 512);
+      if (err == GDBErrorNone) {
+        gTmpBuffer[512] = '\0';
+        println(gTmpBuffer);
+        println("Buffer");
+        gdbSerialWrite(gTmpBuffer, 512);
       } else {
-        err = gdbSendMessage(dataType, gTmpBuffer, chunkSize);
-        if (err != GDBErrorNone) {
-          println("Error sending message");
-        }
+        sprintf(gTmpBuffer, "Error: %d", err);
+        println(gTmpBuffer);
+
+        strcpy(gTmpBuffer, "DMA@    Hello World!CMPH");
+        gTmpBuffer[4] = 1;
+        gTmpBuffer[5] = 0;
+        gTmpBuffer[6] = 0;
+        gTmpBuffer[7] = 12;
+        gdbSerialWrite(gTmpBuffer, 512);
       }
     }
 

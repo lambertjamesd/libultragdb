@@ -52,19 +52,19 @@ function createSerialPort(devName, onReceiveMessage) {
 
         const result = {
             sendMessage: (type, buffer) => {
-                if (verbose) {
-                    console.log(`Sending message type: ${type} ${buffer.toString()}`)
-                }
-                const header = Buffer.alloc(8);
-                header.write('DMA@');
-                header.writeInt8(type, 4);
-                header.writeIntLE(buffer.length, 5, 3);
-                const message = Buffer.concat([header, buffer, Buffer.from('CMPH')]);
-                fs.write(writeFd, message, (err) => {
-                    if (err) {
-                        console.error(err);
-                    }
-                });
+                // const header = Buffer.alloc(8);
+                // header.write('DMA@');
+                // header.writeInt8(type, 4);
+                // header.writeIntBE(buffer.length, 5, 3);
+                // const message = Buffer.concat([header, buffer, Buffer.from('CMPH')]);
+                // if (verbose) {
+                //     console.log(`Sending message: ${type} ${message.toString()}`)
+                // }
+                // fs.write(writeFd, message, (err) => {
+                //     if (err) {
+                //         console.error(err);
+                //     }
+                // });
             },
             onReceiveMessage: onReceiveMessage,
             close: () => {
@@ -85,6 +85,15 @@ function createSerialPort(devName, onReceiveMessage) {
             if (verbose) {
                 console.log(`Flash cart ready ${devName}`);
             }
+
+            setInterval(() => {
+                console.log('Saying hello');
+                fs.write(writeFd, 'Hello World!', (err) => {
+                    if (err) {
+                        console.error(err);
+                    };
+                });
+            }, 1000);
         });
     
         writeStream.on('close', () => {
@@ -113,7 +122,7 @@ function createSerialPort(devName, onReceiveMessage) {
             // to make of a full message
             while (messageStart != -1 && messageStart + 12 <= currentReadMessage.length) {
                 const messageType = currentReadMessage.readInt8(messageStart + 4);
-                const length = currentReadMessage.readIntLE(messageStart + 5, 3);
+                const length = currentReadMessage.readIntBE(messageStart + 5, 3);
 
                 if (messageStart + length + 12 <= currentReadMessage.length) {
                     const data = currentReadMessage.slice(messageStart + 8, messageStart + 8 + length);

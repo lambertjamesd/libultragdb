@@ -11,6 +11,7 @@ enum GDBError {
     GDBErrorBadPacket,
     GDBErrorMessageTooLong,
     GDBErrorBadFooter,
+    GDBErrorDMA,
 };
 
 enum GDBDataType {
@@ -23,7 +24,7 @@ enum GDBDataType {
 
 #define GDB_USB_SERIAL_SIZE 512
 
-void gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ);
+enum GDBError gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ);
 
 u8 gdbSerialCanRead();
 enum GDBError gdbSerialRead(char* target, u32 len);

@@ -168,9 +168,13 @@ enum GDBError gdbCheckForPacket() {
     return GDBErrorNone;
 }
 
-void gdbInitDebugger(OSPiHandle* handler, OSMesgQueue* dmaMessageQ)
+enum GDBError gdbInitDebugger(OSPiHandle* handler, OSMesgQueue* dmaMessageQ)
 {
-    gdbSerialInit(handler, dmaMessageQ);
+    enum GDBError err = gdbSerialInit(handler, dmaMessageQ);
+    if (err != GDBErrorNone) return err;
 
-    gdbCheckForPacket();
+    // gdbCheckForPacket();
+    
+    return GDBErrorNone;
+
 }

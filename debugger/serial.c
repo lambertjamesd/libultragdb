@@ -64,7 +64,7 @@ enum GDBEVRegister {
     GDB_EV_REGISTER_KEY = 0x8004,
 };
 
-s32 gdbDMARead(void* ram, u32 piAddress, u32 len) {
+enum GDBError gdbDMARead(void* ram, u32 piAddress, u32 len) {
 	OSIoMesg dmaIoMesgBuf;
 
     dmaIoMesgBuf.hdr.pri = OS_MESG_PRI_NORMAL;
@@ -76,15 +76,15 @@ s32 gdbDMARead(void* ram, u32 piAddress, u32 len) {
     osInvalDCache(ram, len);
     if (osEPiStartDma(__gdbHandler, &dmaIoMesgBuf, OS_READ) == -1)
     {
-        return -1;
+        return GDBErrorDMA;
     }
 
     osRecvMesg(__gdbDmaMessageQ, NULL, OS_MESG_BLOCK);
 
-    return 0;
+    return GDBErrorNone;
 }
 
-s32 gdbDMAWrite(void* ram, u32 piAddress, u32 len) {
+enum GDBError gdbDMAWrite(void* ram, u32 piAddress, u32 len) {
 	OSIoMesg dmaIoMesgBuf;
 
     dmaIoMesgBuf.hdr.pri = OS_MESG_PRI_NORMAL;
@@ -96,58 +96,74 @@ s32 gdbDMAWrite(void* ram, u32 piAddress, u32 len) {
     osWritebackDCache(ram, len);
     if (osEPiStartDma(__gdbHandler, &dmaIoMesgBuf, OS_WRITE) == -1)
     {
-        return -1;
+        return GDBErrorDMA;
     }
 
     osRecvMesg(__gdbDmaMessageQ, NULL, OS_MESG_BLOCK);
 
-    return 0;
+    return GDBErrorNone;
 }
 
-u32 gdbReadReg(enum GDBEVRegister reg) {
-    u32 result;
-    gdbDMARead(&result, REG_ADDR(reg), sizeof(u32));
-    return result;
+enum GDBError gdbReadReg(enum GDBEVRegister reg, u32* result) {
+    union {
+        long long __align;
+        u32 alignedResult;
+    } uResult;
+    enum GDBError err = gdbDMARead(&uResult.alignedResult, REG_ADDR(reg), sizeof(u32));
+    *result = uResult.alignedResult;
+    return err;
 }
 
-void gdbWriteReg(enum GDBEVRegister reg, u32 value) {
-    gdbDMAWrite(&value, REG_ADDR(reg), sizeof(u32));
+enum GDBError gdbWriteReg(enum GDBEVRegister reg, u32 value) {
+    union {
+        long long __align;
+        u32 alignedResult;
+    } uResult;
+    uResult.alignedResult = value;
+    return gdbDMAWrite(&uResult.alignedResult, REG_ADDR(reg), sizeof(u32));
 }
 
 enum GDBError gdbUsbBusy() {
-    enum GDBError tout = 0;
+    u32 tout = 0;
+    enum GDBError err;
+    u32 registerValue;
 
-    while (gdbReadReg(GDB_EV_REGISTER_USB_CFG) & USB_STA_ACT != 0) {
-        if (tout++ == 8192) {
-            gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD_NOP);
+    do {
+        err = gdbReadReg(GDB_EV_REGISTER_USB_CFG, &registerValue);
+        if (err != GDBErrorNone) return err;
+        if (tout++ > 8192) {
+            err = gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD_NOP);
+            if (err != GDBErrorNone) return err;
             return GDBErrorUSBTimeout;
         }
-    }
+    } while ((registerValue & USB_STA_ACT) != 0);
 
     return GDBErrorNone;
 }
 
 u8 gdbSerialCanRead() {
-    u32 status = gdbReadReg(GDB_EV_REGISTER_USB_CFG) & (USB_STA_PWR | USB_STA_RXF);
-    if (status == USB_STA_PWR) {
-        return 1;
+    u32 status;
+    if (gdbReadReg(GDB_EV_REGISTER_USB_CFG, &status) != GDBErrorNone) {
+        return 0;
     }
-    return 0;
+    return (status & (USB_STA_PWR | USB_STA_RXF)) == USB_STA_PWR;
 }
 
-void gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ)
+enum GDBError gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ)
 {
     __gdbHandler = handler;
     __gdbDmaMessageQ = dmaMessageQ;
 
-    gdbWriteReg(GDB_EV_REGISTER_KEY, 0xAA55);
-    gdbWriteReg(GDB_EV_REGISTER_SYS_CFG, 0);
-    gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD_NOP);
+    enum GDBError err = gdbWriteReg(GDB_EV_REGISTER_KEY, 0xAA55);
+    if (err != GDBErrorNone) return err;
+    err = gdbWriteReg(GDB_EV_REGISTER_SYS_CFG, 0);
+    if (err != GDBErrorNone) return err;
+    return gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD_NOP);
 }
 
 enum GDBError gdbSerialRead(char* target, u32 len) {
     // byte align to 2
-    len = (len + 1) % 2;
+    // len = (len + 1) & ~1;
 
     while (len) {
         int chunkSize = GDB_USB_SERIAL_SIZE;
@@ -156,15 +172,14 @@ enum GDBError gdbSerialRead(char* target, u32 len) {
         }
         int baddr = GDB_USB_SERIAL_SIZE - chunkSize;
 
-        gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD | baddr);
+        enum GDBError err = gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD | baddr);
+        if (err != GDBErrorNone) return err;
 
-        enum GDBError busyWait = gdbUsbBusy();
+        err = gdbUsbBusy();
+        if (err != GDBErrorNone) return err;
 
-        if (busyWait != GDBErrorNone) {
-            return busyWait;
-        }
-
-        gdbDMARead(target, REG_ADDR(GDB_EV_REGISTER_USB_DATA + baddr), chunkSize);
+        err = gdbDMARead(target, REG_ADDR(GDB_EV_REGISTER_USB_DATA + baddr), chunkSize);
+        if (err != GDBErrorNone) return err;
 
         target += chunkSize;
         len -= chunkSize;
@@ -175,7 +190,7 @@ enum GDBError gdbSerialRead(char* target, u32 len) {
 
 enum GDBError gdbSerialWrite(char* src, u32 len) {
     // byte align to 2
-    len = (len + 1) % 2;
+    // len = (len + 1) & ~1;
 
     gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_WR_NOP);
 
@@ -186,14 +201,14 @@ enum GDBError gdbSerialWrite(char* src, u32 len) {
         }
         int baddr = GDB_USB_SERIAL_SIZE - chunkSize;
 
-        gdbDMAWrite(src, REG_ADDR(GDB_EV_REGISTER_USB_DATA + baddr), chunkSize);
-        gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_WR | chunkSize);
+        enum GDBError err = gdbDMAWrite(src, REG_ADDR(GDB_EV_REGISTER_USB_DATA + baddr), chunkSize);
+        if (err != GDBErrorNone) return err;
 
-        enum GDBError busyWait = gdbUsbBusy();
+        err = gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_WR | chunkSize);
+        if (err != GDBErrorNone) return err;
 
-        if (busyWait != GDBErrorNone) {
-            return busyWait;
-        }
+        err = gdbUsbBusy();
+        if (err != GDBErrorNone) return err;
 
         src += chunkSize;
         len -= chunkSize;
@@ -267,8 +282,6 @@ enum GDBError gdbCheckReadHead() {
         if (gdbSerialCanRead()) {
             enum GDBError result = gdbSerialRead(gdbSerialReadBuffer, GDB_USB_SERIAL_SIZE);
             gdbReadPosition = 0;
-            println("Read chunk");
-            println(gdbSerialReadBuffer);
             return result;
         } else {
             return GDBErrorUSBNoData;
