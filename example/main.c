@@ -116,11 +116,12 @@ void start_display(void)
   } 
 }
 
+static char gTmpBuffer[0x1000];
+
 public	void	mainproc(void *arg)
 {
   u16	trig, hold;
   int	frame;
-  char tmp[512];
 
   handler = osCartRomInit();
   frame = 0;
@@ -143,11 +144,21 @@ public	void	mainproc(void *arg)
     trig = lastbutton & (lastbutton & ~trig);
     hold = lastbutton;
 
-    if (gdbSerialCanRead()) {
-      if (gdbSerialRead(tmp, 512) == GDBErrorNone) {
-        gdbSerialWrite(tmp, 512);
-        tmp[511] = '\0';
-        println(tmp);
+    enum GDBDataType dataType;
+    u32 chunkSize;
+
+    while (gdbPollMessageHeader(&dataType, &chunkSize) == GDBErrorNone) {
+      enum GDBError err = gdbReadMessage(gTmpBuffer, chunkSize);
+      gTmpBuffer[chunkSize] = '\0';
+      println(gTmpBuffer);
+
+      if (err != GDBErrorNone) {
+        println("Error reading message");
+      } else {
+        err = gdbSendMessage(dataType, gTmpBuffer, chunkSize);
+        if (err != GDBErrorNone) {
+          println("Error sending message");
+        }
       }
     }
 
