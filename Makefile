@@ -18,14 +18,15 @@ APP =		debugger.out
 
 TARGETS =	debugger.n64
 
-DEBUGGERHFILES = debugger/serial.h
+DEBUGGERHFILES = debugger/serial.h \
+	debugger/debugger.h
 
 HFILES =	$(DEBUGGERHFILES) example/graph.h \
 	example/nu64sys.h \
 	example/thread.h
 
 DEBUGGERFILES = debugger/serial.c \
-
+	debugger/debugger.c
 
 CODEFILES   = $(DEBUGGERFILES) example/nu64sys.c \
 	example/main.c \

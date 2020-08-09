@@ -8,7 +8,7 @@
 #include	"nu64sys.h"
 #include	"thread.h"
 #include	"graph.h"
-#include  "../debugger/serial.h"
+#include  "../debugger/debugger.h"
 
 extern u16	cfb_16_a[];
 extern u16	cfb_16_b[];
@@ -120,7 +120,6 @@ public	void	mainproc(void *arg)
 {
   u16	trig, hold;
   int	frame;
-  int foo = 0;
   char tmp[512];
 
   handler = osCartRomInit();
@@ -134,7 +133,7 @@ public	void	mainproc(void *arg)
   osViBlack(0);
   n_WaitMesg(retrace);
   initcontroller();
-  gdbSerialInit(handler, &n_dmaMessageQ);
+  gdbInitDebugger(handler, &n_dmaMessageQ);
   
   lastbutton = 0;
 
@@ -144,12 +143,13 @@ public	void	mainproc(void *arg)
     trig = lastbutton & (lastbutton & ~trig);
     hold = lastbutton;
 
-    if (gdbSerialRead(tmp, 512) == GDBErrorNone) {
-      gdbSerialWrite(tmp, 512);
-      tmp[511] = '\0';
-      println(tmp);
+    if (gdbSerialCanRead()) {
+      if (gdbSerialRead(tmp, 512) == GDBErrorNone) {
+        gdbSerialWrite(tmp, 512);
+        tmp[511] = '\0';
+        println(tmp);
+      }
     }
-    ++foo;
 
     int line;
 

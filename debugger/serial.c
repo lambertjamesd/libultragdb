@@ -24,8 +24,6 @@ static OSMesgQueue* __gdbDmaMessageQ;
 #define USB_STA_PWR     0x1000
 #define USB_STA_BSY     0x2000
 
-#define USB_SERIAL_SIZE 512
-
 #define USB_CMD_RD_NOP  (USB_LE_CFG | USB_LE_CTR | USB_CFG_RD)
 #define USB_CMD_RD      (USB_LE_CFG | USB_LE_CTR | USB_CFG_RD | USB_CFG_ACT)
 #define USB_CMD_WR_NOP  (USB_LE_CFG | USB_LE_CTR | USB_CFG_WR)
@@ -123,43 +121,39 @@ void gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ)
 }
 
 enum GDBError gdbSerialRead(char* target, u32 len) {
-    if (gdbSerialCanRead()) {
-        while (len) {
-            int chunkSize = USB_SERIAL_SIZE;
-            if (chunkSize > len) {
-                chunkSize = len;
-            }
-            int baddr = USB_SERIAL_SIZE - chunkSize;
+    while (len) {
+        int chunkSize = GDB_USB_SERIAL_SIZE;
+        if (chunkSize > len) {
+            chunkSize = len;
+        }
+        int baddr = GDB_USB_SERIAL_SIZE - chunkSize;
 
-            gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD | baddr);
+        gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD | baddr);
 
-            enum GDBError busyWait = gdbUsbBusy();
+        enum GDBError busyWait = gdbUsbBusy();
 
-            if (busyWait != GDBErrorNone) {
-                return busyWait;
-            }
-
-            gdbDMARead(target, REG_ADDR(GDB_EV_REGISTER_USB_DATA + baddr), chunkSize);
-
-            target += chunkSize;
-            len -= chunkSize;
+        if (busyWait != GDBErrorNone) {
+            return busyWait;
         }
 
-        return GDBErrorNone;
-    } else {
-        return GDBErrorUSBNoData;
+        gdbDMARead(target, REG_ADDR(GDB_EV_REGISTER_USB_DATA + baddr), chunkSize);
+
+        target += chunkSize;
+        len -= chunkSize;
     }
+
+    return GDBErrorNone;
 }
 
 enum GDBError gdbSerialWrite(char* src, u32 len) {
     gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_WR_NOP);
 
     while (len) {
-        int chunkSize = USB_SERIAL_SIZE;
+        int chunkSize = GDB_USB_SERIAL_SIZE;
         if (chunkSize > len) {
             chunkSize = len;
         }
-        int baddr = USB_SERIAL_SIZE - chunkSize;
+        int baddr = GDB_USB_SERIAL_SIZE - chunkSize;
 
         gdbDMAWrite(src, REG_ADDR(GDB_EV_REGISTER_USB_DATA + baddr), chunkSize);
         gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_WR | chunkSize);
@@ -173,6 +167,6 @@ enum GDBError gdbSerialWrite(char* src, u32 len) {
         src += chunkSize;
         len -= chunkSize;
     }
-    
+
     return GDBErrorNone;
 }
