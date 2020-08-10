@@ -136,17 +136,14 @@ enum GDBError gdbUsbBusy() {
             if (err != GDBErrorNone) return err;
             return GDBErrorUSBTimeout;
         }
-    } while ((registerValue & USB_STA_ACT) != 0);
+    } while (registerValue & USB_STA_ACT != 0);
 
     return GDBErrorNone;
 }
 
 u8 gdbSerialCanRead() {
     u32 status;
-    if (gdbReadReg(GDB_EV_REGISTER_USB_CFG, &status) != GDBErrorNone) {
-        return 0;
-    }
-    return (status & (USB_STA_PWR | USB_STA_RXF)) == USB_STA_PWR;
+    return gdbReadReg(GDB_EV_REGISTER_USB_CFG, &status) == GDBErrorNone && (status & (USB_STA_PWR | USB_STA_RXF)) == USB_STA_PWR;
 }
 
 enum GDBError gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ)
