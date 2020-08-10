@@ -12,6 +12,7 @@ enum GDBError {
     GDBErrorMessageTooLong,
     GDBErrorBadFooter,
     GDBErrorDMA,
+    GDBErrorBufferTooSmall,
 };
 
 enum GDBDataType {
@@ -31,7 +32,6 @@ enum GDBError gdbSerialRead(char* target, u32 len);
 enum GDBError gdbSerialWrite(char* src, u32 len);
 
 enum GDBError gdbSendMessage(enum GDBDataType type, char* src, u32 len);
-enum GDBError gdbPollMessageHeader(enum GDBDataType* type, u32* len);
-enum GDBError gdbReadMessage(char* target, u32 len);
+enum GDBError gdbPollMessage(enum GDBDataType* type, char* target, u32* len, u32 maxLen);
 
 #endif

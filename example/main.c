@@ -154,38 +154,17 @@ public	void	mainproc(void *arg)
     enum GDBDataType dataType;
     u32 chunkSize;
 
-    // while (gdbPollMessageHeader(&dataType, &chunkSize) == GDBErrorNone) {
-    //   enum GDBError err = gdbReadMessage(gTmpBuffer, chunkSize);
-    //   gTmpBuffer[chunkSize] = '\0';
-    //   println(gTmpBuffer);
+    while (gdbPollMessage(&dataType, gTmpBuffer, &chunkSize, 0x1000) == GDBErrorNone) {
+      gTmpBuffer[chunkSize] = '\0';
+      println(gTmpBuffer);
 
-    //   if (err != GDBErrorNone) {
-    //     println("Error reading message");
-    //   } else {
-    //     err = gdbSendMessage(dataType, gTmpBuffer, chunkSize);
-    //     if (err != GDBErrorNone) {
-    //       println("Error sending message");
-    //     }
-    //   }
-    // }
-
-    if (gdbSerialCanRead()) {
-      enum GDBError err = gdbSerialRead(gTmpBuffer, 512);
-      if (err == GDBErrorNone) {
-        gTmpBuffer[512] = '\0';
-        println(gTmpBuffer);
-        println("Buffer");
-        gdbSerialWrite(gTmpBuffer, 512);
+      if (err != GDBErrorNone) {
+        println("Error reading message");
       } else {
-        sprintf(gTmpBuffer, "Error: %d", err);
-        println(gTmpBuffer);
-
-        strcpy(gTmpBuffer, "DMA@    Hello World!CMPH");
-        gTmpBuffer[4] = 1;
-        gTmpBuffer[5] = 0;
-        gTmpBuffer[6] = 0;
-        gTmpBuffer[7] = 12;
-        gdbSerialWrite(gTmpBuffer, 512);
+        err = gdbSendMessage(dataType, gTmpBuffer, chunkSize);
+        if (err != GDBErrorNone) {
+          println("Error sending message");
+        }
       }
     }
 

@@ -3,7 +3,6 @@
 #include <string.h>
 #include "serial.h"
 
-static OSPiHandle* __gdbHandler;
 static OSMesgQueue* __gdbDmaMessageQ;
 
 #define KSEG0           0x80000000
@@ -42,6 +41,9 @@ static char gdbSerialSendBuffer[GDB_USB_SERIAL_SIZE];
 static char gdbSerialReadBuffer[GDB_USB_SERIAL_SIZE];
 static u32 gdbReadPosition = GDB_USB_SERIAL_SIZE;
 static u32 gdbHeaderIndexPos = 0;
+static OSPiHandle gdbSerialHandle;
+static OSMesgQueue gdbSerialSemaphore;
+static OSMesg gdbSerialSemaphoreMsg;
 
 static char gdbHeaderText[] = "DMA@";
 static char gdbFooterText[] = "CMPH";
@@ -60,7 +62,7 @@ enum GDBEVRegister {
     GDB_EV_REGISTER_USB_CFG = 0x0004,
     GDB_EV_REGISTER_USB_TIMER = 0x000C,
     GDB_EV_REGISTER_USB_DATA = 0x0400,
-    GDB_EV_REGISTER_SYS_CFG =0x8000,
+    GDB_EV_REGISTER_SYS_CFG = 0x8000,
     GDB_EV_REGISTER_KEY = 0x8004,
 };
 
@@ -74,7 +76,7 @@ enum GDBError gdbDMARead(void* ram, u32 piAddress, u32 len) {
     dmaIoMesgBuf.size = len;
 
     osInvalDCache(ram, len);
-    if (osEPiStartDma(__gdbHandler, &dmaIoMesgBuf, OS_READ) == -1)
+    if (osEPiStartDma(&gdbSerialHandle, &dmaIoMesgBuf, OS_READ) == -1)
     {
         return GDBErrorDMA;
     }
@@ -94,7 +96,7 @@ enum GDBError gdbDMAWrite(void* ram, u32 piAddress, u32 len) {
     dmaIoMesgBuf.size = len;
 
     osWritebackDCache(ram, len);
-    if (osEPiStartDma(__gdbHandler, &dmaIoMesgBuf, OS_WRITE) == -1)
+    if (osEPiStartDma(&gdbSerialHandle, &dmaIoMesgBuf, OS_WRITE) == -1)
     {
         return GDBErrorDMA;
     }
@@ -129,14 +131,14 @@ enum GDBError gdbUsbBusy() {
     u32 registerValue;
 
     do {
-        err = gdbReadReg(GDB_EV_REGISTER_USB_CFG, &registerValue);
-        if (err != GDBErrorNone) return err;
         if (tout++ > 8192) {
             err = gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD_NOP);
             if (err != GDBErrorNone) return err;
             return GDBErrorUSBTimeout;
         }
-    } while (registerValue & USB_STA_ACT != 0);
+        err = gdbReadReg(GDB_EV_REGISTER_USB_CFG, &registerValue);
+        if (err != GDBErrorNone) return err;
+    } while ((registerValue & USB_STA_ACT) != 0);
 
     return GDBErrorNone;
 }
@@ -148,14 +150,31 @@ u8 gdbSerialCanRead() {
 
 enum GDBError gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ)
 {
-    __gdbHandler = handler;
+    gdbSerialHandle = *handler;
+
+    gdbSerialHandle.latency = 0x04;
+    gdbSerialHandle.pulse = 0x0C;
+
+    OSIntMask prev = osGetIntMask();
+    osSetIntMask(0);
+    gdbSerialHandle.next = __osPiTable;
+    __osPiTable = &gdbSerialHandle;
+    osSetIntMask(prev);
+
     __gdbDmaMessageQ = dmaMessageQ;
+
+    // osCreateMesgQueue(&gdbSerialSemaphore, &gdbSerialSemaphoreMsg, 1);
 
     enum GDBError err = gdbWriteReg(GDB_EV_REGISTER_KEY, 0xAA55);
     if (err != GDBErrorNone) return err;
     err = gdbWriteReg(GDB_EV_REGISTER_SYS_CFG, 0);
     if (err != GDBErrorNone) return err;
-    return gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD_NOP);
+    err = gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD_NOP);
+    if (err != GDBErrorNone) return err;
+
+    while (gdbSerialCanRead()) {
+        gdbSerialRead(gdbSerialReadBuffer, GDB_USB_SERIAL_SIZE);
+    }
 }
 
 enum GDBError gdbSerialRead(char* target, u32 len) {
@@ -172,8 +191,10 @@ enum GDBError gdbSerialRead(char* target, u32 len) {
         enum GDBError err = gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD | baddr);
         if (err != GDBErrorNone) return err;
 
-        err = gdbUsbBusy();
-        if (err != GDBErrorNone) return err;
+        // TODO don't skip this.
+        // This doesn't seem to work properly
+        // err = gdbUsbBusy();
+        // if (err != GDBErrorNone) return err;
 
         err = gdbDMARead(target, REG_ADDR(GDB_EV_REGISTER_USB_DATA + baddr), chunkSize);
         if (err != GDBErrorNone) return err;
@@ -214,7 +235,7 @@ enum GDBError gdbSerialWrite(char* src, u32 len) {
     return GDBErrorNone;
 }
 
-enum GDBError gdbSendMessage(enum GDBDataType type, char* src, u32 len) {
+enum GDBError __gdbSendMessage(enum GDBDataType type, char* src, u32 len) {
     struct GDBMessageHeader header;
     enum GDBError err;
 
@@ -274,11 +295,23 @@ enum GDBError gdbSendMessage(enum GDBDataType type, char* src, u32 len) {
     return GDBErrorNone;
 }
 
+enum GDBError gdbSendMessage(enum GDBDataType type, char* src, u32 len) {
+    OSMesg msg = 0;
+    // osSendMesg(&gdbSerialSemaphore, msg, OS_MESG_BLOCK);
+    enum GDBError result = __gdbSendMessage(type, src, len);
+    // osRecvMesg(&gdbSerialSemaphore, &msg, OS_MESG_NOBLOCK);
+    return result;
+}
+
 enum GDBError gdbCheckReadHead() {
     if (gdbReadPosition == GDB_USB_SERIAL_SIZE) {
         if (gdbSerialCanRead()) {
+            println("Reading next chunk");
             enum GDBError result = gdbSerialRead(gdbSerialReadBuffer, GDB_USB_SERIAL_SIZE);
             gdbReadPosition = 0;
+
+            println(gdbSerialReadBuffer);
+
             return result;
         } else {
             return GDBErrorUSBNoData;
@@ -300,6 +333,7 @@ enum GDBError gdbPollMessageHeader(enum GDBDataType* type, u32* len)
                 if (gdbHeaderIndexPos == MESSAGE_HEADER_SIZE) {
                     *type = gdbReadHeader.asHeader.type;
                     *len = gdbReadHeader.asHeader.length;
+                    gdbHeaderIndexPos = 0;
                     ++gdbReadPosition;
                     return GDBErrorNone;
                 }
@@ -374,4 +408,26 @@ enum GDBError gdbReadMessage(char* target, u32 len)
     }
 
     return GDBErrorNone;
+}
+
+enum GDBError __gdbPollMessage(enum GDBDataType* type, char* target, u32* len, u32 maxLen) {
+    enum GDBError err = gdbPollMessageHeader(type, len);
+    if (err != GDBErrorNone)  return err;
+
+    if (*len > maxLen) {
+        return GDBErrorBufferTooSmall;
+    }
+
+    err = gdbReadMessage(target, *len);
+    if (err != GDBErrorNone)  return err;
+
+    return GDBErrorNone;
+}
+
+enum GDBError gdbPollMessage(enum GDBDataType* type, char* target, u32* len, u32 maxLen) {
+    OSMesg msg = 0;
+    // osSendMesg(&gdbSerialSemaphore, msg, OS_MESG_BLOCK);
+    enum GDBError result = __gdbPollMessage(type, target, len, maxLen);
+    // osRecvMesg(&gdbSerialSemaphore, &msg, OS_MESG_NOBLOCK);
+    return result;
 }

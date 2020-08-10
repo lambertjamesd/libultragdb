@@ -52,22 +52,24 @@ function createSerialPort(devName, onReceiveMessage) {
 
         const result = {
             sendMessage: (type, buffer) => {
-                // const header = Buffer.alloc(8);
-                // header.write('DMA@');
-                // header.writeInt8(type, 4);
-                // header.writeIntBE(buffer.length, 5, 3);
-                // const message = Buffer.concat([header, buffer, Buffer.from('CMPH')]);
-                // if (verbose) {
-                //     console.log(`Sending message: ${type} ${message.toString()}`)
-                // }
-                // fs.write(writeFd, message, (err) => {
-                //     if (err) {
-                //         console.error(err);
-                //     }
-                // });
+                const header = Buffer.alloc(8);
+                header.write('DMA@');
+                header.writeInt8(type, 4);
+                header.writeIntBE(buffer.length, 5, 3);
+                const message = Buffer.concat([header, buffer, Buffer.from('CMPH')]);
+                if (verbose) {
+                    console.log(`Sending message: ${type} ${message.toString()}`)
+                }
+                fs.write(writeFd, message, (err) => {
+                    if (err) {
+                        console.error(err);
+                    }
+                });
             },
             onReceiveMessage: onReceiveMessage,
             close: () => {
+                writeStream.unref();
+                readStream.unref();
                 writeStream.destroy();
                 readStream.destroy();
             },
@@ -87,12 +89,7 @@ function createSerialPort(devName, onReceiveMessage) {
             }
 
             setInterval(() => {
-                console.log('Saying hello');
-                fs.write(writeFd, 'Hello World!', (err) => {
-                    if (err) {
-                        console.error(err);
-                    };
-                });
+                result.sendMessage(1, Buffer.from('Hello World'));
             }, 1000);
         });
     
