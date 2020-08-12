@@ -118,7 +118,7 @@ void start_display(void)
 }
 
 static long long __align;
-static char gTmpBuffer[0x1000];
+char gTmpBuffer[0x1000];
 
 public	void	mainproc(void *arg)
 {
@@ -157,14 +157,9 @@ public	void	mainproc(void *arg)
     while (gdbPollMessage(&dataType, gTmpBuffer, &chunkSize, 0x1000) == GDBErrorNone) {
       gTmpBuffer[chunkSize] = '\0';
       println(gTmpBuffer);
-
+      err = gdbSendMessage(dataType, gTmpBuffer, chunkSize);
       if (err != GDBErrorNone) {
-        println("Error reading message");
-      } else {
-        err = gdbSendMessage(dataType, gTmpBuffer, chunkSize);
-        if (err != GDBErrorNone) {
-          println("Error sending message");
-        }
+        println("Error sending message");
       }
     }
 

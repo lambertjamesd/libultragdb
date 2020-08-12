@@ -4,6 +4,7 @@ const net = require('net');
 const fs = require('fs');
 
 let verbose = false;
+let keepAlive = false;
 
 const args = Array.from(process.argv).slice(2).filter(arg => {
     if (arg[0] == '-') {
@@ -11,6 +12,10 @@ const args = Array.from(process.argv).slice(2).filter(arg => {
             case '-v':
             case '--verbose':
                 verbose = true;
+                break;
+            case '-k':
+            case '--keepalive':
+                keepAlive = true;
                 break;
             default:
                 console.error(`Unrecongized argument ${arg}`);
@@ -49,6 +54,7 @@ function createSerialPort(devName, onReceiveMessage) {
     
         let writeFd;
         let currentReadMessage;
+        let intervalHandle;
 
         const result = {
             sendMessage: (type, buffer) => {
@@ -56,7 +62,8 @@ function createSerialPort(devName, onReceiveMessage) {
                 header.write('DMA@');
                 header.writeInt8(type, 4);
                 header.writeIntBE(buffer.length, 5, 3);
-                const message = Buffer.concat([header, buffer, Buffer.from('CMPH')]);
+                var paddingLength = (16 - ((header.length + buffer.length + 4) & 0xF)) & 0xF;
+                const message = Buffer.concat([header, buffer, Buffer.from('CMPH'), Buffer.alloc(paddingLength)]);
                 if (verbose) {
                     console.log(`Sending message: ${type} ${message.toString()}`)
                 }
@@ -68,10 +75,9 @@ function createSerialPort(devName, onReceiveMessage) {
             },
             onReceiveMessage: onReceiveMessage,
             close: () => {
-                writeStream.unref();
-                readStream.unref();
-                writeStream.destroy();
-                readStream.destroy();
+                clearInterval(intervalHandle);
+                writeStream.close();
+                readStream.close();
             },
         };
     
@@ -88,8 +94,8 @@ function createSerialPort(devName, onReceiveMessage) {
                 console.log(`Flash cart ready ${devName}`);
             }
 
-            setInterval(() => {
-                result.sendMessage(1, Buffer.from('Hello World'));
+            intervalHandle = setInterval(() => {
+                result.sendMessage(1, Buffer.from('Hello World!'));
             }, 1000);
         });
     
@@ -110,7 +116,7 @@ function createSerialPort(devName, onReceiveMessage) {
                 currentReadMessage = chunk;
             }
             if (verbose) {
-                console.log(`Received from cart ${chunk.toString()}`);
+                console.log(`Received from cart ${chunk.length} ${chunk.toString()}`);
             }
 
             let messageStart = currentReadMessage.indexOf('DMA@');
@@ -169,7 +175,7 @@ server.on('connection', function(socket) {
     const serialPortPromise = createSerialPort(serialDeviceName, message => {
         switch (message.type) {
             case MESSAGE_TYPE_TEXT:
-                console.log(`text: ${message.data.toString('utf8')}`);
+                console.log(`log: ${message.data.toString('utf8')}`);
                 break;
             case MESSAGE_TYPE_GDB:
                 socket.write(message.data);
@@ -178,10 +184,6 @@ server.on('connection', function(socket) {
     });
 
     serialPortPromise.catch(err => console.error(err));
-
-    serialPortPromise.then(serialPort => {
-        serialPort.sendMessage(MESSAGE_TYPE_GDB, Buffer.from('Hello World!'));
-    });
 
     socket.on('data', function(chunk) {
         if (verbose) {
@@ -199,7 +201,7 @@ server.on('connection', function(socket) {
 
         while (messageEnd != -1 && messageEnd + 3 <= gdbChunk.length) {
             serialPortPromise.then(serialPort => {
-                serialPort.sendMessage(MESSAGE_TYPE_GDB, gdbChunk.slice(0, messageEnd + 3));
+                // serialPort.sendMessage(MESSAGE_TYPE_GDB, gdbChunk.slice(0, messageEnd + 3));
             });
             gdbChunk = gdbChunk.slice(messageEnd + 3);
             messageEnd = gdbChunk.indexOf('#');
@@ -209,8 +211,11 @@ server.on('connection', function(socket) {
     socket.on('end', function() {
         console.log('Debugger connection closed');
         serialPortPromise.then(serialPort => serialPort.close());
-        server.close();
-        process.exit(0);
+
+        if (!keepAlive) {
+            server.close();
+            process.exit(0);
+        }
     });
 
     socket.on('error', function(err) {
