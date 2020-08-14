@@ -203,11 +203,10 @@ enum GDBError gdbSerialWrite(char* src, u32 len) {
             chunkSize = len;
         }
         int baddr = GDB_USB_SERIAL_SIZE - chunkSize;
-
         enum GDBError err = gdbDMAWrite(src, REG_ADDR(GDB_EV_REGISTER_USB_DATA + baddr), chunkSize);
         if (err != GDBErrorNone) return err;
 
-        err = gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_WR | chunkSize);
+        err = gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_WR | baddr);
         if (err != GDBErrorNone) return err;
 
         err = gdbUsbBusy();
@@ -312,6 +311,7 @@ enum GDBError gdbPollMessageHeader(enum GDBDataType* type, u32* len)
 enum GDBError gdbReadMessage(char* target, u32 len)
 {
     u32 chunkSize = len;
+    u32 initialLen = len;
     
     if (chunkSize > USB_MIN_SIZE - MESSAGE_HEADER_SIZE) {
         chunkSize = USB_MIN_SIZE - MESSAGE_HEADER_SIZE;
@@ -344,22 +344,36 @@ enum GDBError gdbReadMessage(char* target, u32 len)
         len -= GDB_USB_SERIAL_SIZE;
     }
 
-    chunkSize = ALIGN_16_BYTES(len + MESSAGE_FOOTER_SIZE);
-    if (chunkSize > GDB_USB_SERIAL_SIZE) {
-        chunkSize = GDB_USB_SERIAL_SIZE;
+    u32 footerStart;
+
+    if (len > 0) {
+        chunkSize = ALIGN_16_BYTES(len + MESSAGE_FOOTER_SIZE);
+        if (chunkSize > GDB_USB_SERIAL_SIZE) {
+            chunkSize = GDB_USB_SERIAL_SIZE;
+        }
+
+        err = gdbSerialRead(gdbSerialReadBuffer, chunkSize);
+        if (err != GDBErrorNone)  return err;
+        memcpy(target, gdbSerialReadBuffer, len);
+
+        footerStart = len;
+        chunkSize -= len;
+    } else {
+        if (initialLen + MESSAGE_HEADER_SIZE < USB_MIN_SIZE) {
+            chunkSize = USB_MIN_SIZE - initialLen - MESSAGE_HEADER_SIZE;
+            footerStart = MESSAGE_HEADER_SIZE + initialLen;
+        } else {
+            chunkSize = 0;
+            footerStart = 0;
+        }
     }
 
-    err = gdbSerialRead(gdbSerialReadBuffer, chunkSize);
-    if (err != GDBErrorNone)  return err;
-    memcpy(target, gdbSerialReadBuffer, len);
-
-    chunkSize -= len;
 
     if (chunkSize > MESSAGE_FOOTER_SIZE) {
         chunkSize = MESSAGE_FOOTER_SIZE;
     }
 
-    if (chunkSize > 0 && strncmp(&gdbSerialReadBuffer[len], gdbFooterText, chunkSize) != 0) {
+    if (chunkSize > 0 && strncmp(&gdbSerialReadBuffer[footerStart], gdbFooterText, chunkSize) != 0) {
         return GDBErrorBadFooter;
     }
 

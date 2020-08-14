@@ -120,6 +120,8 @@ void start_display(void)
 static long long __align;
 char gTmpBuffer[0x1000];
 
+extern OSThread mainThread;
+
 public	void	mainproc(void *arg)
 {
   u16	trig, hold;
@@ -136,12 +138,16 @@ public	void	mainproc(void *arg)
   osViBlack(0);
   n_WaitMesg(retrace);
   initcontroller();
-  enum GDBError err = gdbInitDebugger(handler, &n_dmaMessageQ);
+  OSThread* threadPtr = &mainThread;
+  enum GDBError err = gdbInitDebugger(handler, &n_dmaMessageQ, &threadPtr, 1);
   
   if (err != GDBErrorNone) {
     sprintf(gTmpBuffer, "Error initializing debugger %d", err);
     println(gTmpBuffer);
   }
+
+  println("Start polling");
+  int healthcheck = 0;
 
   lastbutton = 0;
 
@@ -154,14 +160,12 @@ public	void	mainproc(void *arg)
     enum GDBDataType dataType;
     u32 chunkSize;
 
-    while (gdbPollMessage(&dataType, gTmpBuffer, &chunkSize, 0x1000) == GDBErrorNone) {
-      gTmpBuffer[chunkSize] = '\0';
-      println(gTmpBuffer);
-      err = gdbSendMessage(dataType, gTmpBuffer, chunkSize);
-      if (err != GDBErrorNone) {
-        println("Error sending message");
-      }
-    }
+    gdbCheckForPacket();
+
+    // if (++healthcheck > 200) {
+    //   healthcheck = 0;
+    //   println("heartbeat");
+    // }
 
     int line;
 

@@ -5,6 +5,7 @@
 #include <ultra64.h>
 #include "serial.h"
 
-enum GDBError gdbInitDebugger(OSPiHandle* handler, OSMesgQueue* dmaMessageQ);
+enum GDBError gdbInitDebugger(OSPiHandle* handler, OSMesgQueue* dmaMessageQ, OSThread** forThreads, u32 forThreadsLen);
+enum GDBError gdbCheckForPacket();
 
 #endif

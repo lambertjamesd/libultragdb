@@ -27,7 +27,7 @@ private	u64		idleThreadStack[STACKSIZE/8];
  *		MAIN thread
  */
 extern	void		mainproc(void *);
-private	OSThread	mainThread;
+OSThread	mainThread;
 private	u64		mainThreadStack[STACKSIZE/8];
 
 /*

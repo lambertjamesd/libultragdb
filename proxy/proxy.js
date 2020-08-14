@@ -5,6 +5,7 @@ const fs = require('fs');
 
 let verbose = false;
 let keepAlive = false;
+let eagerSerial = false;
 
 const args = Array.from(process.argv).slice(2).filter(arg => {
     if (arg[0] == '-') {
@@ -16,6 +17,10 @@ const args = Array.from(process.argv).slice(2).filter(arg => {
             case '-k':
             case '--keepalive':
                 keepAlive = true;
+                break;
+            case '-e':
+            case '--eager':
+                eagerSerial = true;
                 break;
             default:
                 console.error(`Unrecongized argument ${arg}`);
@@ -65,7 +70,7 @@ function createSerialPort(devName, onReceiveMessage) {
                 var paddingLength = (16 - ((header.length + buffer.length + 4) & 0xF)) & 0xF;
                 const message = Buffer.concat([header, buffer, Buffer.from('CMPH'), Buffer.alloc(paddingLength)]);
                 if (verbose) {
-                    console.log(`Sending message: ${type} ${message.toString()}`)
+                    console.log(`Sending message to cart: ${type} ${buffer.toString()}`)
                 }
                 fs.write(writeFd, message, (err) => {
                     if (err) {
@@ -93,10 +98,6 @@ function createSerialPort(devName, onReceiveMessage) {
             if (verbose) {
                 console.log(`Flash cart ready ${devName}`);
             }
-
-            intervalHandle = setInterval(() => {
-                result.sendMessage(1, Buffer.from('Hello World!'));
-            }, 1000);
         });
     
         writeStream.on('close', () => {
@@ -115,9 +116,6 @@ function createSerialPort(devName, onReceiveMessage) {
             } else {
                 currentReadMessage = chunk;
             }
-            if (verbose) {
-                console.log(`Received from cart ${chunk.length} ${chunk.toString()}`);
-            }
 
             let messageStart = currentReadMessage.indexOf('DMA@');
 
@@ -132,7 +130,7 @@ function createSerialPort(devName, onReceiveMessage) {
                     const footer = currentReadMessage.slice(messageStart + 8 + length, messageStart + 12 + length);
 
                     if (verbose) {
-                        console.log(`Received message of type ${messageType} and length ${length}`);
+                        console.log(`Received message of type ${messageType} ${data}`);
                     }
 
                     if (footer.indexOf('CMPH') !== 0) {
@@ -167,29 +165,39 @@ server.listen(port, function() {
 const MESSAGE_TYPE_TEXT = 1;
 const MESSAGE_TYPE_GDB = 4;
 
-server.on('connection', function(socket) {
-    console.log('Debugger connected');
+let serialPortPromise;
+let activeSocket;
 
-    let gdbChunk;
-
-    const serialPortPromise = createSerialPort(serialDeviceName, message => {
+function openSerialConnection() {
+    serialPortPromise = serialPortPromise || createSerialPort(serialDeviceName, message => {
         switch (message.type) {
             case MESSAGE_TYPE_TEXT:
                 console.log(`log: ${message.data.toString('utf8')}`);
                 break;
             case MESSAGE_TYPE_GDB:
-                socket.write(message.data);
+                if (activeSocket) { 
+                    activeSocket.write(message.data);
+                }
                 break;
         }
     });
-
     serialPortPromise.catch(err => console.error(err));
+}
+
+if (eagerSerial) {
+    openSerialConnection();
+}
+
+server.on('connection', function(socket) {
+    console.log('Debugger connected');
+
+    let gdbChunk;
+
+    activeSocket = socket;
+    
+    openSerialConnection();
 
     socket.on('data', function(chunk) {
-        if (verbose) {
-            console.log(`Data received from gdb: ${chunk.toString()}`);
-        }
-
         if (gdbChunk) {
             gdbChunk = Buffer.concat([gdbChunk, chunk]);
         } else {
@@ -199,18 +207,19 @@ server.on('connection', function(socket) {
         // Ensure only complete gdb messages are sent
         let messageEnd = gdbChunk.indexOf('#');
 
-        while (messageEnd != -1 && messageEnd + 3 <= gdbChunk.length) {
-            serialPortPromise.then(serialPort => {
-                // serialPort.sendMessage(MESSAGE_TYPE_GDB, gdbChunk.slice(0, messageEnd + 3));
-            });
-            gdbChunk = gdbChunk.slice(messageEnd + 3);
-            messageEnd = gdbChunk.indexOf('#');
-        }
+        serialPortPromise.then(serialPort => {
+            while (messageEnd != -1 && messageEnd + 3 <= gdbChunk.length) {
+                serialPort.sendMessage(MESSAGE_TYPE_GDB, gdbChunk.slice(0, messageEnd + 3));
+                gdbChunk = gdbChunk.slice(messageEnd + 3);
+                messageEnd = gdbChunk.indexOf('#');
+            }
+        });
     });
 
     socket.on('end', function() {
         console.log('Debugger connection closed');
         serialPortPromise.then(serialPort => serialPort.close());
+        serialPortPromise = null;
 
         if (!keepAlive) {
             server.close();
