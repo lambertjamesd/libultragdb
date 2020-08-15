@@ -141,6 +141,24 @@ u8 gdbSerialCanRead() {
     return gdbReadReg(GDB_EV_REGISTER_USB_CFG, &status) == GDBErrorNone && (status & (USB_STA_PWR | USB_STA_RXF)) == USB_STA_PWR;
 }
 
+
+u8 gdbSerialCanWrite() {
+    u32 status;
+    return gdbReadReg(GDB_EV_REGISTER_USB_CFG, &status) == GDBErrorNone && (status & (USB_STA_PWR | USB_STA_TXE)) == USB_STA_PWR;
+}
+
+enum GDBError gdbWaitForWritable() {
+    u32 timeout = 0;
+
+    while (!gdbSerialCanWrite()) {
+        if (++timeout == 8192) {
+            return GDBErrorUSBTimeout;
+        }
+    }
+
+    return GDBErrorNone;
+}
+
 enum GDBError gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ)
 {
     gdbSerialHandle = *handler;
@@ -195,6 +213,9 @@ enum GDBError gdbSerialRead(char* target, u32 len) {
 }
 
 enum GDBError gdbSerialWrite(char* src, u32 len) {
+    enum GDBError err = gdbWaitForWritable();
+    if (err != GDBErrorNone) return err;
+
     gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_WR_NOP);
 
     while (len) {
@@ -203,7 +224,7 @@ enum GDBError gdbSerialWrite(char* src, u32 len) {
             chunkSize = len;
         }
         int baddr = GDB_USB_SERIAL_SIZE - chunkSize;
-        enum GDBError err = gdbDMAWrite(src, REG_ADDR(GDB_EV_REGISTER_USB_DATA + baddr), chunkSize);
+        err = gdbDMAWrite(src, REG_ADDR(GDB_EV_REGISTER_USB_DATA + baddr), chunkSize);
         if (err != GDBErrorNone) return err;
 
         err = gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_WR | baddr);
@@ -246,6 +267,7 @@ enum GDBError __gdbSendMessage(enum GDBDataType type, char* src, u32 len) {
     } else {
         // header partially fits
         if (GDB_USB_SERIAL_SIZE > MESSAGE_HEADER_SIZE + firstChunkLength) {
+            println("Partial header");
             memcpy(gdbSerialSendBuffer + MESSAGE_HEADER_SIZE + firstChunkLength, gdbFooterText, GDB_USB_SERIAL_SIZE - MESSAGE_HEADER_SIZE - firstChunkLength);
         }
 
@@ -255,7 +277,13 @@ enum GDBError __gdbSendMessage(enum GDBDataType type, char* src, u32 len) {
         len -= firstChunkLength;
 
         while (len >= GDB_USB_SERIAL_SIZE) {
-            err = gdbSerialWrite(src, GDB_USB_SERIAL_SIZE);
+            println("Sending full chunk");
+            if ((int)src == ((int)src & !0x7)) {
+                err = gdbSerialWrite(src, GDB_USB_SERIAL_SIZE);
+            } else {
+                memcpy(gdbSerialSendBuffer, src, GDB_USB_SERIAL_SIZE);
+                gdbSerialWrite(gdbSerialSendBuffer, GDB_USB_SERIAL_SIZE);
+            }
             if (err != GDBErrorNone) return err;
             src += GDB_USB_SERIAL_SIZE;
             len -= GDB_USB_SERIAL_SIZE;

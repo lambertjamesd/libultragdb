@@ -7,7 +7,9 @@
 #define MAX_DEBUGGER_THREADS    8
 
 #define GDB_ANY_THREAD      0
-#define GDB_ALL_THREADS     -1  
+#define GDB_ALL_THREADS     -1 
+
+#define strStartsWith(str, constStr) (strncmp(str, constStr, sizeof constStr - 1) == 0)
 
 static OSThread* gdbTargetThreads[MAX_DEBUGGER_THREADS];
 static OSId gdbCurrentThreadG;
@@ -20,18 +22,31 @@ static int gdbNextSearchIndex;
 
 void println(char* text);
 
-u32 gdbParseHex(char* src) {
+OSThread* gdbFindThread(OSId id) {
+    int i;
+    for (i = 0; i < MAX_DEBUGGER_THREADS; ++i) {
+        if (gdbTargetThreads[i] && (
+            id == GDB_ANY_THREAD ||
+            osGetThreadId(gdbTargetThreads[i]) == id
+        )) {
+            return gdbTargetThreads[i];
+        }
+    }
+    return NULL;
+}
+
+u32 gdbParseHex(char* src, u32 maxBytes) {
     u32 result = 0;
     int currentChar;
+    u32 maxCharacters = maxBytes * 2;
 
-    for (currentChar = 0; currentChar < 8; ++currentChar) {
-        result = result << 4;
+    for (currentChar = 0; currentChar < maxCharacters; ++currentChar) {
         if (*src >= 'a' && *src <= 'f') {
-            result += 10 + *src - 'a';
+            result = (result << 4) + 10 + *src - 'a';
         } else if (*src >= 'A' && *src <= 'F') {
-            result += 10 + *src - 'A';
+            result = (result << 4) + 10 + *src - 'A';
         } else if (*src >= '0' && *src <= '9') {
-            result += *src - '0';
+            result = (result << 4) + *src - '0';
         } else {
             break;
         }
@@ -40,6 +55,18 @@ u32 gdbParseHex(char* src) {
     }
 
     return result;
+}
+
+static char gdbHexLetters[16] = "0123456789abcdef";
+
+char* gdbWriteHex(char* target, u8* src, u32 bytes) {
+    u32 i;
+    for (i = 0; i < bytes; ++i) {
+        *target++ = gdbHexLetters[(*src) >> 4];
+        *target++ = gdbHexLetters[(*src) & 0xF];
+        ++src;
+    }
+    return target;
 }
 
 void gdbCopy(char* dst, char* src, int len)
@@ -111,7 +138,7 @@ enum GDBError gdbParsePacket(char* input, u32 len, char **commandStart, char **p
 
 enum GDBError gdbSendStopReply() {
     char* current = gdbOutputBuffer;
-    current += sprintf(current, "#T%02x", 0);
+    current += sprintf(current, "$T%02x", 0);
 
     int i;
     for (i = 0; i < MAX_DEBUGGER_THREADS; ++i) {
@@ -123,21 +150,92 @@ enum GDBError gdbSendStopReply() {
             // }
         }
     }
-
     *current++ = '#';
-    *current = '\0';
 
     return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
 }
 
+enum GDBError gdbReplyRegisters() {
+    char* current = gdbOutputBuffer;
+    *current++ = '$';
+
+    OSThread* thread = gdbFindThread(gdbCurrentThreadg);
+
+    if (thread) {
+        /* 0~ GPR0-31(yes, include zero),[32]PS(status),LO,HI,BadVAddr,Cause,PC,[38]FPR0-31,[70]fpcs,fpir,[72]..(dsp?),[90]end */
+        current += sprintf(current, "%08x%08x", 0, 0); // zero
+        current = gdbWriteHex(current, (u8*)&thread->context, offsetof(__OSThreadContext, gp));
+        current += sprintf(current, "%08x%08x", 0, 0); // k0
+        current += sprintf(current, "%08x%08x", 0, 0); // k1
+        current = gdbWriteHex(current, (u8*)&thread->context.gp, offsetof(__OSThreadContext, lo) - offsetof(__OSThreadContext, gp));
+
+        current += sprintf(current, "%08x%08x", 0, thread->context.sr);
+        current = gdbWriteHex(current, (u8*)&thread->context.lo, sizeof(u64) * 2);
+        current += sprintf(current, "%08x%08x", 0, thread->context.badvaddr);
+        current += sprintf(current, "%08x%08x", 0, thread->context.cause);
+        current += sprintf(current, "%08x%08x", 0, thread->context.pc);
+
+        current = gdbWriteHex(current, (u8*)&thread->context.fp0, sizeof(__OSThreadContext) - offsetof(__OSThreadContext, fp0));
+        current += sprintf(current, "%08x%08x", 0, thread->context.fpcsr);
+    }
+
+    *current++ = '#';
+    *current++ = '\0';
+
+    return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
+}
+
+enum GDBError gdbReplyMemory(char* commandStart, char *packetEnd) {
+    char* current = gdbOutputBuffer;
+    *current++ = '$';
+
+    char* lenText = commandStart + 1;
+
+    while (*lenText != ',') {
+        if (lenText == packetEnd) {
+            return GDBErrorBadPacket;
+        }
+        ++lenText;
+    }
+
+    u8* dataSrc = (u8*)gdbParseHex(commandStart + 1, 4);
+    u32 len = gdbParseHex(lenText + 1, 4);
+
+    if ((u32)dataSrc < K0BASE) {
+        while ((u32)dataSrc < K0BASE && len > 0) {
+            *current++ = '0';
+            *current++ = '0';
+            ++dataSrc;
+            --len;
+        }
+    }
+
+    if (len > 0) {
+        u32 maxLen;
+        if ((u32)dataSrc < osMemSize + K0BASE) {
+            maxLen = (osMemSize + K0BASE) - (u32)dataSrc;
+        }
+
+        if (len > maxLen) {
+            len = maxLen;
+        }
+
+        current = gdbWriteHex(current, dataSrc, len);
+    }
+
+    *current++ = '#';
+    *current++ = '\0';
+    return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
+}
+
 enum GDBError gdbHandleQuery(char* commandStart, char *packetEnd) {
-    if (strncmp(commandStart, "qSupported", strlen("qSupported")) == 0) {
-        strcpy(gdbOutputBuffer, "$PacketSize=4000;vContSupported+#");
+    if (strStartsWith(commandStart, "qSupported")) {
+        strcpy(gdbOutputBuffer, "$PacketSize=4000;vContSupported+;swbreak+#");
         return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
-    } else if (strncmp(commandStart, "qTStatus", strlen("qTStatus")) == 0) {
+    } else if (strStartsWith(commandStart, "qTStatus")) {
         strcpy(gdbOutputBuffer, "$T0#");
         return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
-    } else if (strncmp(commandStart, "qfThreadInfo", strlen("qfThreadInfo")) == 0) {
+    } else if (strStartsWith(commandStart, "qfThreadInfo")) {
         strcpy(gdbOutputBuffer, "$m");
         char* outputWrite = gdbOutputBuffer + 2;
         int i;
@@ -155,13 +253,13 @@ enum GDBError gdbHandleQuery(char* commandStart, char *packetEnd) {
         *outputWrite++ = '#';
         *outputWrite++ = '\0';
         return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
-    } else if (strncmp(commandStart, "qsThreadInfo", strlen("qsThreadInfo")) == 0) {
+    } else if (strStartsWith(commandStart, "qsThreadInfo")) {
         strcpy(gdbOutputBuffer, "$l#");
         return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
-    } else if (strncmp(commandStart, "qAttached", strlen("qAttached")) == 0) {
+    } else if (strStartsWith(commandStart, "qAttached")) {
         strcpy(gdbOutputBuffer, "$1#");
         return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
-    } else if (strncmp(commandStart, "qC", strlen("qC")) == 0) {
+    } else if (strStartsWith(commandStart, "qC")) {
         strcpy(gdbOutputBuffer, "$QC");
         char* outputWrite = gdbOutputBuffer + 3;
         int i;
@@ -179,25 +277,35 @@ enum GDBError gdbHandleQuery(char* commandStart, char *packetEnd) {
             *outputWrite++ = '\0';
         }
         return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
+    } else if (strStartsWith(commandStart, "qTfV")) {
+        return gdbSendMessage(GDBDataTypeGDB, "$#00", strlen("$#00"));
+    } else if (strStartsWith(commandStart, "qTfP")) {
+        return gdbSendMessage(GDBDataTypeGDB, "$#00", strlen("$#00"));
+    } else if (strStartsWith(commandStart, "qOffsets")) {
+        strcpy(gdbOutputBuffer, "$TextSeg=000#");
+        return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
+    } else if (strStartsWith(commandStart, "qSymbol")) {
+        return gdbSendMessage(GDBDataTypeGDB, "$OK#9a", strlen("$OK#9a"));
     }
 
+    println("Unknown q packet");
     println(commandStart);
 
     return gdbSendMessage(GDBDataTypeGDB, "$#00", strlen("$#00"));
 }
 
 enum GDBError gdbHandleV(char* commandStart, char *packetEnd) {
-    if (strncmp(commandStart, "vMustReplyEmpty", strlen("vMustReplyEmpty")) == 0) {
+    if (strStartsWith(commandStart, "vMustReplyEmpty")) {
         return gdbSendMessage(GDBDataTypeGDB, "$#00", strlen("$#00"));
     }
 
+    println("Unknown v packet");
     println(commandStart);
 
     return gdbSendMessage(GDBDataTypeGDB, "$#00", strlen("$#00"));
 }
 
 enum GDBError gdbHandlePacket(char* commandStart, char *packetEnd) {
-    println(commandStart);
     switch (*commandStart) {
         case 'q':
             return gdbHandleQuery(commandStart, packetEnd);
@@ -210,7 +318,7 @@ enum GDBError gdbHandlePacket(char* commandStart, char *packetEnd) {
             if (commandStart[2] == '-') {
                 threadId = -1;
             } else {
-                threadId = gdbParseHex(commandStart + 2);
+                threadId = gdbParseHex(commandStart + 2, 4);
             }
 
             switch (commandStart[1]) {
@@ -231,8 +339,13 @@ enum GDBError gdbHandlePacket(char* commandStart, char *packetEnd) {
             return gdbSendMessage(GDBDataTypeGDB, "$#00", strlen("$#00"));
         case '?':
             return gdbSendStopReply();
+        case 'g':
+            return gdbReplyRegisters();
+        case 'm':
+            return gdbReplyMemory(commandStart, packetEnd);
     }
 
+    println("Unknown packet");
     println(commandStart);
 
     return gdbSendMessage(GDBDataTypeGDB, "$#00", strlen("$#00"));
