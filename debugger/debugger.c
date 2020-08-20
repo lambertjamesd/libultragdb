@@ -9,6 +9,14 @@
 #define GDB_ANY_THREAD      0
 #define GDB_ALL_THREADS     -1 
 
+#define GDB_STACKSIZE           0x400
+#define GDB_DEBUGGER_THREAD_ID  0xDBDB
+#define GDB_CHECKS_PER_SEC      10
+
+// defined by makerom
+extern char     _codeSegmentDataStart[];
+extern char     _codeSegmentTextStart[];
+
 #define strStartsWith(str, constStr) (strncmp(str, constStr, sizeof constStr - 1) == 0)
 
 static OSThread* gdbTargetThreads[MAX_DEBUGGER_THREADS];
@@ -19,6 +27,14 @@ static char gdbPacketBuffer[MAX_PACKET_SIZE];
 static char gdbOutputBuffer[MAX_PACKET_SIZE];
 static int gdbNextBufferTarget;
 static int gdbNextSearchIndex;
+static int gdbIsRunning;
+
+static OSThread gdbDebuggerThread;
+static u64 gdbDebuggerThreadStack[GDB_STACKSIZE/sizeof(u64)];
+
+static OSTimer gdbPollTimer;
+static OSMesgQueue gdbPollMesgQ;
+static OSMesg gdbPollMesgQMessage;
 
 void println(char* text);
 
@@ -33,6 +49,23 @@ OSThread* gdbFindThread(OSId id) {
         }
     }
     return NULL;
+}
+
+OSThread* gdbNextThread(OSThread* curr, OSId id) {
+    if (id == GDB_ALL_THREADS) {
+        int i;
+        for (i = 0; i < MAX_DEBUGGER_THREADS; ++i) {
+            if (curr == NULL && gdbTargetThreads[i]) {
+                return gdbTargetThreads[i];
+            } else if (curr != NULL && gdbTargetThreads[i] == curr) {
+                curr = NULL;
+            }
+        }
+
+        return NULL;
+    } else {
+        return gdbFindThread(id);
+    }
 }
 
 u32 gdbParseHex(char* src, u32 maxBytes) {
@@ -55,6 +88,14 @@ u32 gdbParseHex(char* src, u32 maxBytes) {
     }
 
     return result;
+}
+
+OSId gdbParseThreadId(char* src) {
+    if (src[0] == '-') {
+        return GDB_ALL_THREADS;
+    } else {
+        return gdbParseHex(src, 4);
+    }
 }
 
 static char gdbHexLetters[16] = "0123456789abcdef";
@@ -138,20 +179,24 @@ enum GDBError gdbParsePacket(char* input, u32 len, char **commandStart, char **p
 
 enum GDBError gdbSendStopReply() {
     char* current = gdbOutputBuffer;
-    current += sprintf(current, "$T%02x", 0);
+    current += sprintf(current, "$T%02x", 5);
+
+    int repliedBreak = 0;
 
     int i;
     for (i = 0; i < MAX_DEBUGGER_THREADS; ++i) {
         if (gdbTargetThreads[i]) {
-            current += sprintf(current, "thread:%d;", osGetThreadId(gdbTargetThreads[i]));
-            // todo get CPU halt state
-            // if (gdbTargetThreads[i]->state) {
+            if (gdbTargetThreads[i]->state == OS_STATE_STOPPED && !repliedBreak) {
+                repliedBreak = 1;
+                current += sprintf(current, "swbreak:");
+            }
 
-            // }
+            current += sprintf(current, "thread:%d;", osGetThreadId(gdbTargetThreads[i]));
         }
     }
     *current++ = '#';
 
+    strcpy(gdbOutputBuffer, "$S05#");
     return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
 }
 
@@ -173,6 +218,8 @@ enum GDBError gdbReplyRegisters() {
         current = gdbWriteHex(current, (u8*)&thread->context.lo, sizeof(u64) * 2);
         current += sprintf(current, "%08x%08x", 0, thread->context.badvaddr);
         current += sprintf(current, "%08x%08x", 0, thread->context.cause);
+        // the elf file loaded by gdb has symbols relative to 0, actual code is relative to 0x80000000
+        // this makes the debugger happy
         current += sprintf(current, "%08x%08x", 0, thread->context.pc);
 
         current = gdbWriteHex(current, (u8*)&thread->context.fp0, sizeof(__OSThreadContext) - offsetof(__OSThreadContext, fp0));
@@ -233,8 +280,7 @@ enum GDBError gdbHandleQuery(char* commandStart, char *packetEnd) {
         strcpy(gdbOutputBuffer, "$PacketSize=4000;vContSupported+;swbreak+#");
         return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
     } else if (strStartsWith(commandStart, "qTStatus")) {
-        strcpy(gdbOutputBuffer, "$T0#");
-        return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
+        return gdbSendMessage(GDBDataTypeGDB, "$#00", strlen("$#00"));
     } else if (strStartsWith(commandStart, "qfThreadInfo")) {
         strcpy(gdbOutputBuffer, "$m");
         char* outputWrite = gdbOutputBuffer + 2;
@@ -282,10 +328,25 @@ enum GDBError gdbHandleQuery(char* commandStart, char *packetEnd) {
     } else if (strStartsWith(commandStart, "qTfP")) {
         return gdbSendMessage(GDBDataTypeGDB, "$#00", strlen("$#00"));
     } else if (strStartsWith(commandStart, "qOffsets")) {
-        strcpy(gdbOutputBuffer, "$TextSeg=000#");
+        // 0x20 is a magic number. I don't know why but it makes the addresses line up correctly
+        sprintf(gdbOutputBuffer, "$Text=%x;Data=%x;Bss=%x#", 0, 0, 0);
         return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
     } else if (strStartsWith(commandStart, "qSymbol")) {
         return gdbSendMessage(GDBDataTypeGDB, "$OK#9a", strlen("$OK#9a"));
+    } else if (strStartsWith(commandStart, "qThreadExtraInfo")) {
+        OSId threadId = gdbParseHex(commandStart + sizeof("qThreadExtraInfo"), 4);
+
+        OSThread* thread = gdbFindThread(threadId);
+
+        if (thread) {
+            int strLen = sprintf(gdbOutputBuffer + 0x200, "state %d priority %d", thread->state, thread->priority);
+            gdbOutputBuffer[0] = '$';
+            char* nextOut = gdbWriteHex(gdbOutputBuffer + 1, gdbOutputBuffer + 0x200, strLen);
+            *nextOut++ = '#';
+        return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
+        } else {
+            return gdbSendMessage(GDBDataTypeGDB, "$#00", strlen("$#00"));
+        }
     }
 
     println("Unknown q packet");
@@ -297,6 +358,52 @@ enum GDBError gdbHandleQuery(char* commandStart, char *packetEnd) {
 enum GDBError gdbHandleV(char* commandStart, char *packetEnd) {
     if (strStartsWith(commandStart, "vMustReplyEmpty")) {
         return gdbSendMessage(GDBDataTypeGDB, "$#00", strlen("$#00"));
+    } else if (strStartsWith(commandStart, "vCont")) {
+        if (commandStart[5] == '?') {
+            strcpy(gdbOutputBuffer, "$c;s;t;r#");
+            return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
+        } else {
+            OSId threadId;
+
+            char* idLoc = commandStart + 6;
+            while (idLoc < packetEnd && *idLoc++ != ':');
+
+            if (idLoc < packetEnd && *idLoc != '#') {
+                threadId = gdbParseThreadId(idLoc);
+            } else {
+                threadId = GDB_ALL_THREADS;
+            }
+
+            OSThread *thread = NULL;
+
+            while ((thread = gdbNextThread(thread, threadId))) {
+                switch (commandStart[6])
+                {
+                case 'c':
+                {
+                    osStartThread(thread);
+                    break;
+                }
+                case 's':
+                {
+                    // TODO
+                    break;
+                }
+                case 't':
+                {
+                    osStopThread(thread);
+                    break;
+                }
+                case 'r':
+                {
+                    // TODO
+                    break;
+                }
+                }
+            }
+
+            return gdbSendStopReply();
+        }
     }
 
     println("Unknown v packet");
@@ -343,6 +450,9 @@ enum GDBError gdbHandlePacket(char* commandStart, char *packetEnd) {
             return gdbReplyRegisters();
         case 'm':
             return gdbReplyMemory(commandStart, packetEnd);
+        case 'D':
+            gdbIsRunning = 0;
+            return gdbSendMessage(GDBDataTypeGDB, "$OK#9a", strlen("$OK#9a"));
     }
 
     println("Unknown packet");
@@ -379,6 +489,25 @@ enum GDBError gdbCheckForPacket() {
     return GDBErrorUSBNoData;
 }
 
+void gdbDebuggerLoop(void *arg) {
+    osCreateMesgQueue(&gdbPollMesgQ, &gdbPollMesgQMessage, 1);
+    osSetTimer(
+        &gdbPollTimer, 
+        OS_CPU_COUNTER / GDB_CHECKS_PER_SEC, 
+        OS_CPU_COUNTER / GDB_CHECKS_PER_SEC, 
+        &gdbPollMesgQ, 
+        NULL
+    );
+
+    gdbIsRunning = 1;
+    while (gdbIsRunning) {
+        OSMesg msg;
+        osRecvMesg(&gdbPollMesgQ, &msg, OS_MESG_BLOCK);
+        while (gdbCheckForPacket() == GDBErrorNone);
+    }
+    osDestroyThread(&gdbDebuggerThread);
+}
+
 enum GDBError gdbInitDebugger(OSPiHandle* handler, OSMesgQueue* dmaMessageQ, OSThread** forThreads, u32 forThreadsLen)
 {
     enum GDBError err = gdbSerialInit(handler, dmaMessageQ);
@@ -400,8 +529,17 @@ enum GDBError gdbInitDebugger(OSPiHandle* handler, OSMesgQueue* dmaMessageQ, OST
         gdbTargetThreads[i] = NULL;
     }
 
-    // gdbCheckForPacket();
+    osCreateThread(&gdbDebuggerThread, GDB_DEBUGGER_THREAD_ID, gdbDebuggerLoop, NULL, gdbDebuggerThreadStack + GDB_STACKSIZE/sizeof(u64), 11);
+    osStartThread(&gdbDebuggerThread);
+
+    if (primaryThread != NULL) {
+        osStopThread(primaryThread);
+    }
     
     return GDBErrorNone;
 
+}
+
+void gdbBreak() {
+    asm("break");
 }

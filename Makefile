@@ -5,7 +5,8 @@ include $(ROOT)/usr/include/make/PRdefs
 FINAL = YES
 
 ifeq ($(FINAL), YES)
-OPTIMIZER       = -O2
+# OPTIMIZER       = -O2
+OPTIMIZER       = -g
 LCDEFS          = -DNDEBUG -D_FINALROM -DF3DEX_GBI_2
 N64LIB          = -lultra_rom
 else
@@ -17,6 +18,12 @@ endif
 APP =		debugger.out
 
 TARGETS =	debugger.n64
+
+MAKEROM = /home/james/go/src/github.com/trhodeos/spicy/cmd/spicy/spicy \
+	--as_command=mips64-elf-as \
+	--cpp_command=cpp \
+	--ld_command=mips64-elf-ld \
+	--objcopy_command=mips64-elf-objcopy
 
 DEBUGGERHFILES = debugger/serial.h \
 	debugger/debugger.h

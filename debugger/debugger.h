@@ -7,5 +7,6 @@
 
 enum GDBError gdbInitDebugger(OSPiHandle* handler, OSMesgQueue* dmaMessageQ, OSThread** forThreads, u32 forThreadsLen);
 enum GDBError gdbCheckForPacket();
+void gdbBreak();
 
 #endif
