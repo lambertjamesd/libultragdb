@@ -43,15 +43,6 @@ static u32 	seed =1;
 extern OSMesgQueue  n_dmaMessageQ;
 OSPiHandle          *handler;
 
-extern char     _codeSegmentRomStart[];
-extern char     _codeSegmentStart[];
-extern char     _codeSegmentTextStart[];
-extern char     _codeSegmentTextEnd[];
-extern char     _codeSegmentDataStart[];
-extern char     _codeSegmentDataEnd[];
-extern char     _codeSegmentBssStart[];
-extern char     _codeSegmentBssEnd[];
-
 void println(char* text)
 {
   char* nextLine = textGrid[nextLineIndex];
@@ -156,18 +147,6 @@ public	void	mainproc(void *arg)
   }
 
   sprintf(gTmpBuffer, "%x", &n_dmaMessageQ);
-  println(gTmpBuffer);
-
-  sprintf(gTmpBuffer, "%x %x %x %x %x %x %x %x",
-    _codeSegmentRomStart,
-    _codeSegmentStart,
-    _codeSegmentTextStart,
-    _codeSegmentTextEnd,
-    _codeSegmentDataStart,
-    _codeSegmentDataEnd,
-    _codeSegmentBssStart,
-    _codeSegmentBssEnd
-  );
   println(gTmpBuffer);
 
   println("Start polling");
