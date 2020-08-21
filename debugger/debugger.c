@@ -2,6 +2,7 @@
 #include "debugger.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
 
 #define MAX_PACKET_SIZE     0x4000
 #define MAX_DEBUGGER_THREADS    8
@@ -12,6 +13,17 @@
 #define GDB_STACKSIZE           0x400
 #define GDB_DEBUGGER_THREAD_ID  0xDBDB
 #define GDB_CHECKS_PER_SEC      10
+
+#define GDB_IS_ATTACHED         (1 << 0)
+#define GDB_IS_WAITING_STOP     (1 << 1)
+
+#define GDB_BREAK_INSTRUCTION(code)   (0x0000000D | (((code) & 0xFFFFF) << 6))
+#define GDB_GET_BREAK_CODE(instr) (((instr) >> 6) & 0xFFFFF)
+#define GDB_TRAP_INSTRUCTION(code) (0x00000034 | (((code) & 0x3ff) << 6))
+#define GDB_GET_TRAP_CODE(instr) (((instr) >> 6) & 0x3ff)
+
+extern OSThread *	__osGetCurrFaultedThread(void);
+extern OSThread *	__osGetNextFaultedThread(OSThread *);
 
 // defined by makerom
 extern char     _codeSegmentDataStart[];
@@ -27,7 +39,7 @@ static char gdbPacketBuffer[MAX_PACKET_SIZE];
 static char gdbOutputBuffer[MAX_PACKET_SIZE];
 static int gdbNextBufferTarget;
 static int gdbNextSearchIndex;
-static int gdbIsRunning;
+static int gdbRunFlags;
 
 static OSThread gdbDebuggerThread;
 static u64 gdbDebuggerThreadStack[GDB_STACKSIZE/sizeof(u64)];
@@ -35,6 +47,8 @@ static u64 gdbDebuggerThreadStack[GDB_STACKSIZE/sizeof(u64)];
 static OSTimer gdbPollTimer;
 static OSMesgQueue gdbPollMesgQ;
 static OSMesg gdbPollMesgQMessage;
+
+static struct GDBBreakpoint gdbBreakpoints[GDB_MAX_BREAK_POINTS];
 
 void println(char* text);
 
@@ -149,6 +163,47 @@ int gdbApplyChecksum(char* message)
     return strlen(messageStart);
 }
 
+struct GDBBreakpoint* gdbFindBreakpoint(u32 addr) {
+    int i;
+    struct GDBBreakpoint* firstEmpty = NULL;
+    for (i = 0; i < GDB_MAX_BREAK_POINTS; ++i) {
+        if (!firstEmpty && gdbBreakpoints[i].type == GDBBreakpointTypeNone) {
+            firstEmpty = &gdbBreakpoints[i];
+        } else if (gdbBreakpoints[i].type != GDBBreakpointTypeNone && gdbBreakpoints[i].addr == addr) {
+            return &gdbBreakpoints[i];
+        }
+    }
+
+    return firstEmpty;
+}
+
+struct GDBBreakpoint* gdbInsertBreakPoint(u32 addr, enum GDBBreakpointType type) {
+    struct GDBBreakpoint* result = gdbFindBreakpoint(addr);
+
+    if (result) {
+        if (result->type == GDBBreakpointTypeNone) {
+            result->prevValue = *((u32*)addr);
+            *((u32*)addr) = GDB_TRAP_INSTRUCTION(0);
+            result->type = type;
+        } else if (result->type < type) {
+            result->type = type;
+        }
+    }
+
+    return result;
+}
+
+void gdbRemoveBreakpoint(struct GDBBreakpoint* brk) {
+    if (brk && brk->type != GDBBreakpointTypeNone) {
+        if (brk->type != GDBBreakpointTypeUserUnapplied) {
+            *((u32*)brk->addr) = brk->prevValue;
+        }
+        brk->prevValue = 0;
+        brk->addr = 0;
+        brk->type = GDBBreakpointTypeNone;
+    }
+}
+
 enum GDBError gdbParsePacket(char* input, u32 len, char **commandStart, char **packetEnd)
 {
     char* stringEnd = input + len;
@@ -177,6 +232,10 @@ enum GDBError gdbParsePacket(char* input, u32 len, char **commandStart, char **p
     return GDBErrorBadPacket;
 }
 
+void gdbWaitForStop() {
+    gdbRunFlags |= GDB_IS_WAITING_STOP;
+}
+
 enum GDBError gdbSendStopReply() {
     char* current = gdbOutputBuffer;
     current += sprintf(current, "$T%02x", 5);
@@ -195,8 +254,8 @@ enum GDBError gdbSendStopReply() {
         }
     }
     *current++ = '#';
+    *current++ = '\0';
 
-    strcpy(gdbOutputBuffer, "$S05#");
     return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
 }
 
@@ -303,7 +362,7 @@ enum GDBError gdbHandleQuery(char* commandStart, char *packetEnd) {
         strcpy(gdbOutputBuffer, "$l#");
         return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
     } else if (strStartsWith(commandStart, "qAttached")) {
-        strcpy(gdbOutputBuffer, "$1#");
+        strcpy(gdbOutputBuffer, "$0#");
         return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
     } else if (strStartsWith(commandStart, "qC")) {
         strcpy(gdbOutputBuffer, "$QC");
@@ -360,7 +419,7 @@ enum GDBError gdbHandleV(char* commandStart, char *packetEnd) {
         return gdbSendMessage(GDBDataTypeGDB, "$#00", strlen("$#00"));
     } else if (strStartsWith(commandStart, "vCont")) {
         if (commandStart[5] == '?') {
-            strcpy(gdbOutputBuffer, "$c;s;t;r#");
+            strcpy(gdbOutputBuffer, "$c;t#");
             return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
         } else {
             OSId threadId;
@@ -402,7 +461,8 @@ enum GDBError gdbHandleV(char* commandStart, char *packetEnd) {
                 }
             }
 
-            return gdbSendStopReply();
+            gdbWaitForStop();
+            return GDBErrorNone;
         }
     }
 
@@ -451,8 +511,30 @@ enum GDBError gdbHandlePacket(char* commandStart, char *packetEnd) {
         case 'm':
             return gdbReplyMemory(commandStart, packetEnd);
         case 'D':
-            gdbIsRunning = 0;
+            gdbRunFlags &= ~GDB_IS_ATTACHED;
             return gdbSendMessage(GDBDataTypeGDB, "$OK#9a", strlen("$OK#9a"));
+        case 'z':
+        case 'Z':
+        {
+            if (commandStart[1] == '0') {
+                u32 addr = gdbParseHex(&commandStart[3], 4);
+
+                if (*commandStart == 'z') {
+                    gdbRemoveBreakpoint(gdbFindBreakpoint(addr));
+                } else {
+                    struct GDBBreakpoint* brk = gdbInsertBreakPoint(addr, GDBBreakpointTypeUser);
+
+                    if (!brk) {
+                        strcpy(gdbOutputBuffer, "$E00#");
+                        return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
+                    }
+                }
+
+                return gdbSendMessage(GDBDataTypeGDB, "$OK#9a", strlen("$OK#9a"));
+            } else {
+                break;
+            }
+        }
     }
 
     println("Unknown packet");
@@ -489,6 +571,16 @@ enum GDBError gdbCheckForPacket() {
     return GDBErrorUSBNoData;
 }
 
+void gdbErrorHandler(s16 code, s16 numArgs, ...) {
+   va_list valist;
+
+    gdbSendMessage(
+        GDBDataTypeText, 
+        gdbPacketBuffer, 
+        sprintf(gdbPacketBuffer, "code %04X args %04X", code, numArgs)
+    );
+}
+
 void gdbDebuggerLoop(void *arg) {
     osCreateMesgQueue(&gdbPollMesgQ, &gdbPollMesgQMessage, 1);
     osSetTimer(
@@ -499,12 +591,29 @@ void gdbDebuggerLoop(void *arg) {
         NULL
     );
 
-    gdbIsRunning = 1;
-    while (gdbIsRunning) {
+    OSErrorHandler prevHandler = osSetErrorHandler(gdbErrorHandler);
+
+    gdbRunFlags |= GDB_IS_ATTACHED;
+    while (gdbRunFlags & GDB_IS_ATTACHED) {
         OSMesg msg;
         osRecvMesg(&gdbPollMesgQ, &msg, OS_MESG_BLOCK);
         while (gdbCheckForPacket() == GDBErrorNone);
+
+        OSThread* currThread = __osGetCurrFaultedThread();
+
+        gdbSendMessage(GDBDataTypeText, gdbPacketBuffer, sprintf(gdbPacketBuffer, "thread %08X", currThread));
+
+        while (currThread) {
+            gdbSendMessage(GDBDataTypeText, "Faulted Thread!", strlen("Faulted Thread!"));
+            if (gdbFindThread(osGetThreadId(currThread)) && (gdbRunFlags & GDB_IS_WAITING_STOP)) {
+                gdbSendStopReply();
+                gdbRunFlags &= ~GDB_IS_WAITING_STOP;
+                break;
+            }
+            currThread = __osGetNextFaultedThread(currThread);
+        }
     }
+    osSetErrorHandler(prevHandler);
     osDestroyThread(&gdbDebuggerThread);
 }
 
@@ -541,5 +650,5 @@ enum GDBError gdbInitDebugger(OSPiHandle* handler, OSMesgQueue* dmaMessageQ, OST
 }
 
 void gdbBreak() {
-    asm("break");
+    asm("teq $0, $0");
 }

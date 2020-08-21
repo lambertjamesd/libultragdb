@@ -146,9 +146,6 @@ public	void	mainproc(void *arg)
     println(gTmpBuffer);
   }
 
-  sprintf(gTmpBuffer, "%x", &n_dmaMessageQ);
-  println(gTmpBuffer);
-
   println("Start polling");
   int healthcheck = 0;
 
@@ -163,10 +160,10 @@ public	void	mainproc(void *arg)
     enum GDBDataType dataType;
     u32 chunkSize;
 
-    // if (++healthcheck > 200) {
-    //   healthcheck = 0;
-    //   println("heartbeat");
-    // }
+    if (++healthcheck > 200) {
+      healthcheck = 0;
+      println("heartbeat");
+    }
 
     int line;
 
