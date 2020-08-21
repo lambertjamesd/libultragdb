@@ -157,6 +157,10 @@ public	void	mainproc(void *arg)
     trig = lastbutton & (lastbutton & ~trig);
     hold = lastbutton;
 
+    if (trig) {
+      gdbBreak();
+    }
+
     enum GDBDataType dataType;
     u32 chunkSize;
 

@@ -17,8 +17,6 @@
 #define GDB_IS_ATTACHED         (1 << 0)
 #define GDB_IS_WAITING_STOP     (1 << 1)
 
-#define GDB_BREAK_INSTRUCTION(code)   (0x0000000D | (((code) & 0xFFFFF) << 6))
-#define GDB_GET_BREAK_CODE(instr) (((instr) >> 6) & 0xFFFFF)
 #define GDB_TRAP_INSTRUCTION(code) (0x00000034 | (((code) & 0x3ff) << 6))
 #define GDB_GET_TRAP_CODE(instr) (((instr) >> 6) & 0x3ff)
 
@@ -32,6 +30,7 @@ extern char     _codeSegmentTextStart[];
 #define strStartsWith(str, constStr) (strncmp(str, constStr, sizeof constStr - 1) == 0)
 
 static OSThread* gdbTargetThreads[MAX_DEBUGGER_THREADS];
+static OSThread* gdbManualBreak;
 static OSId gdbCurrentThreadG;
 static OSId gdbCurrentThreadg;
 static OSId gdbCurrentThreadc;
@@ -591,20 +590,20 @@ void gdbDebuggerLoop(void *arg) {
         NULL
     );
 
-    OSErrorHandler prevHandler = osSetErrorHandler(gdbErrorHandler);
-
     gdbRunFlags |= GDB_IS_ATTACHED;
     while (gdbRunFlags & GDB_IS_ATTACHED) {
         OSMesg msg;
         osRecvMesg(&gdbPollMesgQ, &msg, OS_MESG_BLOCK);
         while (gdbCheckForPacket() == GDBErrorNone);
 
+        if (gdbManualBreak && (gdbRunFlags & GDB_IS_WAITING_STOP)) {
+            gdbSendStopReply();
+            gdbManualBreak = NULL;
+        }
+
         OSThread* currThread = __osGetCurrFaultedThread();
 
-        gdbSendMessage(GDBDataTypeText, gdbPacketBuffer, sprintf(gdbPacketBuffer, "thread %08X", currThread));
-
         while (currThread) {
-            gdbSendMessage(GDBDataTypeText, "Faulted Thread!", strlen("Faulted Thread!"));
             if (gdbFindThread(osGetThreadId(currThread)) && (gdbRunFlags & GDB_IS_WAITING_STOP)) {
                 gdbSendStopReply();
                 gdbRunFlags &= ~GDB_IS_WAITING_STOP;
@@ -613,7 +612,6 @@ void gdbDebuggerLoop(void *arg) {
             currThread = __osGetNextFaultedThread(currThread);
         }
     }
-    osSetErrorHandler(prevHandler);
     osDestroyThread(&gdbDebuggerThread);
 }
 
@@ -650,5 +648,14 @@ enum GDBError gdbInitDebugger(OSPiHandle* handler, OSMesgQueue* dmaMessageQ, OST
 }
 
 void gdbBreak() {
-    asm("teq $0, $0");
+    OSThread* currThread = gdbFindThread(osGetThreadId(NULL));
+
+    if (!currThread) {
+        currThread = gdbFindThread(GDB_ANY_THREAD);
+    }
+    
+    if (currThread) {
+        gdbManualBreak = currThread;
+        osStopThread(currThread);
+    }
 }
