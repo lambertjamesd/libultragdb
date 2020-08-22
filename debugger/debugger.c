@@ -17,6 +17,7 @@
 #define GDB_IS_ATTACHED         (1 << 0)
 #define GDB_IS_WAITING_STOP     (1 << 1)
 
+#define GDB_BREAK_INSTRUCTION(code) (0x0000000D | (((code) & 0xfffff) << 6))
 #define GDB_TRAP_INSTRUCTION(code) (0x00000034 | (((code) & 0x3ff) << 6))
 #define GDB_GET_TRAP_CODE(instr) (((instr) >> 6) & 0x3ff)
 
@@ -192,6 +193,21 @@ struct GDBBreakpoint* gdbInsertBreakPoint(u32 addr, enum GDBBreakpointType type)
     return result;
 }
 
+void gdbDisableBreakpoint(struct GDBBreakpoint* breakpoint) {
+    if (breakpoint && breakpoint->type == GDBBreakpointTypeUser) {
+        *((u32*)breakpoint->addr) = breakpoint->prevValue;
+        breakpoint->type = GDBBreakpointTypeUserUnapplied;
+    }
+}
+
+void gdbRenableBreakpoint(struct GDBBreakpoint* breakpoint) {
+    if (breakpoint && breakpoint->type == GDBBreakpointTypeUserUnapplied) {
+        breakpoint->prevValue = *((u32*)breakpoint->addr);
+        *((u32*)breakpoint->addr) = GDB_TRAP_INSTRUCTION(0);
+        breakpoint->type = GDBBreakpointTypeUser;
+    }
+}
+
 void gdbRemoveBreakpoint(struct GDBBreakpoint* brk) {
     if (brk && brk->type != GDBBreakpointTypeNone) {
         if (brk->type != GDBBreakpointTypeUserUnapplied) {
@@ -235,9 +251,9 @@ void gdbWaitForStop() {
     gdbRunFlags |= GDB_IS_WAITING_STOP;
 }
 
-enum GDBError gdbSendStopReply() {
+enum GDBError gdbSendStopReply(u32 stopReason) {
     char* current = gdbOutputBuffer;
-    current += sprintf(current, "$T%02x", 5);
+    current += sprintf(current, "$T%02x", stopReason);
 
     int repliedBreak = 0;
 
@@ -255,7 +271,21 @@ enum GDBError gdbSendStopReply() {
     *current++ = '#';
     *current++ = '\0';
 
+    for (i = 0; i < GDB_MAX_BREAK_POINTS; ++i) {
+        gdbRenableBreakpoint(&gdbBreakpoints[i]);
+    }
+
     return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
+}
+
+void gdbResumeThread(OSThread* thread) {
+    if (thread == gdbManualBreak) {
+        gdbManualBreak = NULL;
+    }
+
+    gdbDisableBreakpoint(gdbFindBreakpoint(thread->context.pc));
+
+    osStartThread(thread);
 }
 
 enum GDBError gdbReplyRegisters() {
@@ -325,7 +355,15 @@ enum GDBError gdbReplyMemory(char* commandStart, char *packetEnd) {
             len = maxLen;
         }
 
-        current = gdbWriteHex(current, dataSrc, len);
+        char* strEnd = gdbWriteHex(current, dataSrc, len);
+
+        if (gdbManualBreak && gdbManualBreak->context.pc >= (u32)dataSrc && gdbManualBreak->context.pc + sizeof(u32) <= ((u32)dataSrc + len)) {
+            u32 offset = gdbManualBreak->context.pc - (u32)dataSrc;
+            u32 brk = GDB_BREAK_INSTRUCTION(0);
+            gdbWriteHex(current + offset * 2, (u8*)&brk, sizeof(u32));
+        }
+
+        current = strEnd;
     }
 
     *current++ = '#';
@@ -439,7 +477,7 @@ enum GDBError gdbHandleV(char* commandStart, char *packetEnd) {
                 {
                 case 'c':
                 {
-                    osStartThread(thread);
+                    gdbResumeThread(thread);
                     break;
                 }
                 case 's':
@@ -504,7 +542,7 @@ enum GDBError gdbHandlePacket(char* commandStart, char *packetEnd) {
         case '!':
             return gdbSendMessage(GDBDataTypeGDB, "$#00", strlen("$#00"));
         case '?':
-            return gdbSendStopReply();
+            return gdbSendStopReply(GDB_SIGTRAP);
         case 'g':
             return gdbReplyRegisters();
         case 'm':
@@ -597,15 +635,15 @@ void gdbDebuggerLoop(void *arg) {
         while (gdbCheckForPacket() == GDBErrorNone);
 
         if (gdbManualBreak && (gdbRunFlags & GDB_IS_WAITING_STOP)) {
-            gdbSendStopReply();
-            gdbManualBreak = NULL;
+            gdbRunFlags &= ~GDB_IS_WAITING_STOP;
+            gdbSendStopReply(GDB_SIGTRAP);
         }
 
         OSThread* currThread = __osGetCurrFaultedThread();
 
         while (currThread) {
             if (gdbFindThread(osGetThreadId(currThread)) && (gdbRunFlags & GDB_IS_WAITING_STOP)) {
-                gdbSendStopReply();
+                gdbSendStopReply(GDB_SIGTRAP);
                 gdbRunFlags &= ~GDB_IS_WAITING_STOP;
                 break;
             }
