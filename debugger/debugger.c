@@ -78,7 +78,11 @@ OSThread* gdbNextThread(OSThread* curr, OSId id) {
 
         return NULL;
     } else {
-        return gdbFindThread(id);
+        if (curr) {
+            return NULL;
+        } else {
+            return gdbFindThread(id);
+        }
     }
 }
 
@@ -163,6 +167,12 @@ int gdbApplyChecksum(char* message)
     return strlen(messageStart);
 }
 
+void gdbWriteInstruction(u32 addr, u32 value) {
+    *((u32*)addr) = value;
+    osWritebackDCache((void*)addr, sizeof(u32));
+    osInvalICache((void*)addr, sizeof(u32));
+}
+
 struct GDBBreakpoint* gdbFindBreakpoint(u32 addr) {
     int i;
     struct GDBBreakpoint* firstEmpty = NULL;
@@ -183,11 +193,12 @@ struct GDBBreakpoint* gdbInsertBreakPoint(u32 addr, enum GDBBreakpointType type)
     if (result) {
         if (result->type == GDBBreakpointTypeNone) {
             result->prevValue = *((u32*)addr);
-            *((u32*)addr) = GDB_TRAP_INSTRUCTION(0);
+            gdbWriteInstruction(addr, GDB_TRAP_INSTRUCTION(0));
             result->type = type;
         } else if (result->type < type) {
             result->type = type;
         }
+        result->addr = addr;
     }
 
     return result;
@@ -195,7 +206,7 @@ struct GDBBreakpoint* gdbInsertBreakPoint(u32 addr, enum GDBBreakpointType type)
 
 void gdbDisableBreakpoint(struct GDBBreakpoint* breakpoint) {
     if (breakpoint && breakpoint->type == GDBBreakpointTypeUser) {
-        *((u32*)breakpoint->addr) = breakpoint->prevValue;
+        gdbWriteInstruction(breakpoint->addr, breakpoint->prevValue);
         breakpoint->type = GDBBreakpointTypeUserUnapplied;
     }
 }
@@ -203,7 +214,7 @@ void gdbDisableBreakpoint(struct GDBBreakpoint* breakpoint) {
 void gdbRenableBreakpoint(struct GDBBreakpoint* breakpoint) {
     if (breakpoint && breakpoint->type == GDBBreakpointTypeUserUnapplied) {
         breakpoint->prevValue = *((u32*)breakpoint->addr);
-        *((u32*)breakpoint->addr) = GDB_TRAP_INSTRUCTION(0);
+        gdbWriteInstruction(breakpoint->addr, GDB_TRAP_INSTRUCTION(0));
         breakpoint->type = GDBBreakpointTypeUser;
     }
 }
@@ -211,7 +222,7 @@ void gdbRenableBreakpoint(struct GDBBreakpoint* breakpoint) {
 void gdbRemoveBreakpoint(struct GDBBreakpoint* brk) {
     if (brk && brk->type != GDBBreakpointTypeNone) {
         if (brk->type != GDBBreakpointTypeUserUnapplied) {
-            *((u32*)brk->addr) = brk->prevValue;
+            gdbWriteInstruction(brk->addr, brk->prevValue);
         }
         brk->prevValue = 0;
         brk->addr = 0;
@@ -251,26 +262,18 @@ void gdbWaitForStop() {
     gdbRunFlags |= GDB_IS_WAITING_STOP;
 }
 
-enum GDBError gdbSendStopReply(u32 stopReason) {
+enum GDBError gdbSendStopReply(u32 stopReason, OSThread* thread) {
     char* current = gdbOutputBuffer;
     current += sprintf(current, "$T%02x", stopReason);
-
-    int repliedBreak = 0;
-
-    int i;
-    for (i = 0; i < MAX_DEBUGGER_THREADS; ++i) {
-        if (gdbTargetThreads[i]) {
-            if (gdbTargetThreads[i]->state == OS_STATE_STOPPED && !repliedBreak) {
-                repliedBreak = 1;
-                current += sprintf(current, "swbreak:");
-            }
-
-            current += sprintf(current, "thread:%d;", osGetThreadId(gdbTargetThreads[i]));
-        }
+    if (thread->state == OS_STATE_STOPPED) {
+        current += sprintf(current, "swbreak:");
     }
+
+    current += sprintf(current, "thread:%d;", osGetThreadId(thread));
     *current++ = '#';
     *current++ = '\0';
 
+    int i;
     for (i = 0; i < GDB_MAX_BREAK_POINTS; ++i) {
         gdbRenableBreakpoint(&gdbBreakpoints[i]);
     }
@@ -284,6 +287,8 @@ void gdbResumeThread(OSThread* thread) {
     }
 
     gdbDisableBreakpoint(gdbFindBreakpoint(thread->context.pc));
+    // clear fault flag
+    thread->flags &= ~OS_FLAG_FAULT;
 
     osStartThread(thread);
 }
@@ -542,7 +547,7 @@ enum GDBError gdbHandlePacket(char* commandStart, char *packetEnd) {
         case '!':
             return gdbSendMessage(GDBDataTypeGDB, "$#00", strlen("$#00"));
         case '?':
-            return gdbSendStopReply(GDB_SIGTRAP);
+            return gdbSendStopReply(GDB_SIGTRAP, gdbFindThread(GDB_ANY_THREAD));
         case 'g':
             return gdbReplyRegisters();
         case 'm':
@@ -634,20 +639,20 @@ void gdbDebuggerLoop(void *arg) {
         osRecvMesg(&gdbPollMesgQ, &msg, OS_MESG_BLOCK);
         while (gdbCheckForPacket() == GDBErrorNone);
 
-        if (gdbManualBreak && (gdbRunFlags & GDB_IS_WAITING_STOP)) {
-            gdbRunFlags &= ~GDB_IS_WAITING_STOP;
-            gdbSendStopReply(GDB_SIGTRAP);
-        }
-
-        OSThread* currThread = __osGetCurrFaultedThread();
-
-        while (currThread) {
-            if (gdbFindThread(osGetThreadId(currThread)) && (gdbRunFlags & GDB_IS_WAITING_STOP)) {
-                gdbSendStopReply(GDB_SIGTRAP);
+        if (gdbRunFlags & GDB_IS_WAITING_STOP) {
+            if (gdbManualBreak) {
                 gdbRunFlags &= ~GDB_IS_WAITING_STOP;
-                break;
+                gdbSendStopReply(GDB_SIGTRAP, gdbManualBreak);
+            } else {
+                int i;
+                for (i = 0; i < MAX_DEBUGGER_THREADS; ++i) {
+                    if (gdbTargetThreads[i] && (gdbTargetThreads[i]->flags & OS_FLAG_FAULT)) {
+                        gdbRunFlags &= ~GDB_IS_WAITING_STOP;
+                        gdbSendStopReply(GDB_SIGTRAP, gdbTargetThreads[i]);
+                        break;
+                    }
+                }
             }
-            currThread = __osGetNextFaultedThread(currThread);
         }
     }
     osDestroyThread(&gdbDebuggerThread);

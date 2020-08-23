@@ -21,7 +21,7 @@ struct GDBBreakpoint {
     enum GDBBreakpointType type; 
 };
 
-#define GDB_MAX_BREAK_POINTS    128
+#define GDB_MAX_BREAK_POINTS    32
 
 enum GDBError gdbInitDebugger(OSPiHandle* handler, OSMesgQueue* dmaMessageQ, OSThread** forThreads, u32 forThreadsLen);
 enum GDBError gdbCheckForPacket();
