@@ -5,9 +5,6 @@
 #include <ultra64.h>
 #include "serial.h"
 
-#define GDB_SIGTRAP     5
-#define GDB_SIGUSR1     30
-
 enum GDBBreakpointType {
     GDBBreakpointTypeNone,
     GDBBreakpointTypeTemporary,

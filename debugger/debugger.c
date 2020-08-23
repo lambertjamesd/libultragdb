@@ -14,12 +14,18 @@
 #define GDB_DEBUGGER_THREAD_ID  0xDBDB
 #define GDB_CHECKS_PER_SEC      10
 
+#define GDB_BRANCH_DELAY        0x80000000
+
 #define GDB_IS_ATTACHED         (1 << 0)
 #define GDB_IS_WAITING_STOP     (1 << 1)
+
+#define GDB_TRAP_IS_BREAK_CODE  0x123
 
 #define GDB_BREAK_INSTRUCTION(code) (0x0000000D | (((code) & 0xfffff) << 6))
 #define GDB_TRAP_INSTRUCTION(code) (0x00000034 | (((code) & 0x3ff) << 6))
 #define GDB_GET_TRAP_CODE(instr) (((instr) >> 6) & 0x3ff)
+
+#define GDB_GET_EXC_CODE(cause) (((cause) >> 2) & 0x1f)
 
 extern OSThread *	__osGetCurrFaultedThread(void);
 extern OSThread *	__osGetNextFaultedThread(OSThread *);
@@ -31,7 +37,6 @@ extern char     _codeSegmentTextStart[];
 #define strStartsWith(str, constStr) (strncmp(str, constStr, sizeof constStr - 1) == 0)
 
 static OSThread* gdbTargetThreads[MAX_DEBUGGER_THREADS];
-static OSThread* gdbManualBreak;
 static OSId gdbCurrentThreadG;
 static OSId gdbCurrentThreadg;
 static OSId gdbCurrentThreadc;
@@ -50,7 +55,51 @@ static OSMesg gdbPollMesgQMessage;
 
 static struct GDBBreakpoint gdbBreakpoints[GDB_MAX_BREAK_POINTS];
 
+static int gdbSignals[32] = {
+    2, // SIGINT
+    11, // SIGSEGV
+    11, // SIGSEGV
+    11, // SIGSEGV
+    11, // SIGSEGV
+    11, // SIGSEGV
+    10, // SIGBUS
+    10, // SIGBUS
+    12, // SIGSYS
+    5, // SIGTRAP
+    4, // SIGILL
+    30, // SIGUSR1
+    8, // SIGFPE
+    5, // SIGTRAP
+    0, // reserved
+    8, // SIGFPE
+    0, // reserved
+    0, // reserved
+    0, // reserved
+    0, // reserved
+    0, // reserved
+    0, // reserved
+    0, // reserved
+    5, // SIGTRAP
+    0, // reserved
+    0, // reserved
+    0, // reserved
+    0, // reserved
+    0, // reserved
+    0, // reserved
+    0, // reserved
+    0, // reserved
+};
+
 void println(char* text);
+
+u32 gdbGetFaultAddress(OSThread* thread) {
+    if (thread->context.cause & GDB_BRANCH_DELAY) {
+        // pc points to a branch instruction
+        return thread->context.pc + 4;
+    } else {
+        return thread->context.pc;
+    }
+}
 
 OSThread* gdbFindThread(OSId id) {
     int i;
@@ -193,7 +242,7 @@ struct GDBBreakpoint* gdbInsertBreakPoint(u32 addr, enum GDBBreakpointType type)
     if (result) {
         if (result->type == GDBBreakpointTypeNone) {
             result->prevValue = *((u32*)addr);
-            gdbWriteInstruction(addr, GDB_TRAP_INSTRUCTION(0));
+            gdbWriteInstruction(addr, GDB_TRAP_INSTRUCTION(GDB_TRAP_IS_BREAK_CODE));
             result->type = type;
         } else if (result->type < type) {
             result->type = type;
@@ -214,7 +263,7 @@ void gdbDisableBreakpoint(struct GDBBreakpoint* breakpoint) {
 void gdbRenableBreakpoint(struct GDBBreakpoint* breakpoint) {
     if (breakpoint && breakpoint->type == GDBBreakpointTypeUserUnapplied) {
         breakpoint->prevValue = *((u32*)breakpoint->addr);
-        gdbWriteInstruction(breakpoint->addr, GDB_TRAP_INSTRUCTION(0));
+        gdbWriteInstruction(breakpoint->addr, GDB_TRAP_INSTRUCTION(GDB_TRAP_IS_BREAK_CODE));
         breakpoint->type = GDBBreakpointTypeUser;
     }
 }
@@ -262,10 +311,21 @@ void gdbWaitForStop() {
     gdbRunFlags |= GDB_IS_WAITING_STOP;
 }
 
-enum GDBError gdbSendStopReply(u32 stopReason, OSThread* thread) {
+enum GDBError gdbSendStopReply(OSThread* thread) {
     char* current = gdbOutputBuffer;
-    current += sprintf(current, "$T%02x", stopReason);
-    if (thread->state == OS_STATE_STOPPED) {
+    int excCode = GDB_GET_EXC_CODE(thread->context.cause);
+    current += sprintf(current, "$T%02x", gdbSignals[excCode]);
+    u32 breakAddr = gdbGetFaultAddress(thread);
+
+    u32 instr = *((u32*)breakAddr);
+    u32 trapCode = GDB_GET_TRAP_CODE(instr);
+
+    // check for breakpoint or trap
+    if (
+        // breakpoint
+        excCode == 9 || 
+        // breakpoint simulated with trap code
+        excCode == 13 && trapCode == GDB_TRAP_IS_BREAK_CODE && GDB_TRAP_INSTRUCTION(trapCode) == instr) {
         current += sprintf(current, "swbreak:");
     }
 
@@ -282,10 +342,10 @@ enum GDBError gdbSendStopReply(u32 stopReason, OSThread* thread) {
 }
 
 void gdbResumeThread(OSThread* thread) {
-    if (thread == gdbManualBreak) {
-        gdbManualBreak = NULL;
+    if (thread->context.pc == (u32)gdbBreak) {
+        // hacky way to skip breakpoint instruction
+        thread->context.pc = (u32)thread->context.ra;
     }
-
     gdbDisableBreakpoint(gdbFindBreakpoint(thread->context.pc));
     // clear fault flag
     thread->flags &= ~OS_FLAG_FAULT;
@@ -311,9 +371,12 @@ enum GDBError gdbReplyRegisters() {
         current = gdbWriteHex(current, (u8*)&thread->context.lo, sizeof(u64) * 2);
         current += sprintf(current, "%08x%08x", 0, thread->context.badvaddr);
         current += sprintf(current, "%08x%08x", 0, thread->context.cause);
-        // the elf file loaded by gdb has symbols relative to 0, actual code is relative to 0x80000000
-        // this makes the debugger happy
-        current += sprintf(current, "%08x%08x", 0, thread->context.pc);
+        if (thread->context.pc == (u32)gdbBreak) {
+            // when inside gdbBreak, report the breakpoint to be at where the function was called
+            current += sprintf(current, "%08x%08x", 0, (u32)thread->context.ra - 8);
+        } else {
+            current += sprintf(current, "%08x%08x", 0, thread->context.pc);
+        }
 
         current = gdbWriteHex(current, (u8*)&thread->context.fp0, sizeof(__OSThreadContext) - offsetof(__OSThreadContext, fp0));
         current += sprintf(current, "%08x%08x", 0, thread->context.fpcsr);
@@ -361,12 +424,6 @@ enum GDBError gdbReplyMemory(char* commandStart, char *packetEnd) {
         }
 
         char* strEnd = gdbWriteHex(current, dataSrc, len);
-
-        if (gdbManualBreak && gdbManualBreak->context.pc >= (u32)dataSrc && gdbManualBreak->context.pc + sizeof(u32) <= ((u32)dataSrc + len)) {
-            u32 offset = gdbManualBreak->context.pc - (u32)dataSrc;
-            u32 brk = GDB_BREAK_INSTRUCTION(0);
-            gdbWriteHex(current + offset * 2, (u8*)&brk, sizeof(u32));
-        }
 
         current = strEnd;
     }
@@ -547,7 +604,7 @@ enum GDBError gdbHandlePacket(char* commandStart, char *packetEnd) {
         case '!':
             return gdbSendMessage(GDBDataTypeGDB, "$#00", strlen("$#00"));
         case '?':
-            return gdbSendStopReply(GDB_SIGTRAP, gdbFindThread(GDB_ANY_THREAD));
+            return gdbSendStopReply(gdbFindThread(GDB_ANY_THREAD));
         case 'g':
             return gdbReplyRegisters();
         case 'm':
@@ -640,17 +697,12 @@ void gdbDebuggerLoop(void *arg) {
         while (gdbCheckForPacket() == GDBErrorNone);
 
         if (gdbRunFlags & GDB_IS_WAITING_STOP) {
-            if (gdbManualBreak) {
-                gdbRunFlags &= ~GDB_IS_WAITING_STOP;
-                gdbSendStopReply(GDB_SIGTRAP, gdbManualBreak);
-            } else {
-                int i;
-                for (i = 0; i < MAX_DEBUGGER_THREADS; ++i) {
-                    if (gdbTargetThreads[i] && (gdbTargetThreads[i]->flags & OS_FLAG_FAULT)) {
-                        gdbRunFlags &= ~GDB_IS_WAITING_STOP;
-                        gdbSendStopReply(GDB_SIGTRAP, gdbTargetThreads[i]);
-                        break;
-                    }
+            int i;
+            for (i = 0; i < MAX_DEBUGGER_THREADS; ++i) {
+                if (gdbTargetThreads[i] && (gdbTargetThreads[i]->flags & OS_FLAG_FAULT)) {
+                    gdbRunFlags &= ~GDB_IS_WAITING_STOP;
+                    gdbSendStopReply(gdbTargetThreads[i]);
+                    break;
                 }
             }
         }
@@ -690,15 +742,14 @@ enum GDBError gdbInitDebugger(OSPiHandle* handler, OSMesgQueue* dmaMessageQ, OST
 
 }
 
-void gdbBreak() {
-    OSThread* currThread = gdbFindThread(osGetThreadId(NULL));
-
-    if (!currThread) {
-        currThread = gdbFindThread(GDB_ANY_THREAD);
-    }
-    
-    if (currThread) {
-        gdbManualBreak = currThread;
-        osStopThread(currThread);
-    }
-}
+/**
+ * Implement gdbBreak in assembly to ensure that `teq` is the first instruction of the function
+ */
+asm(
+    ".global gdbBreak\n\t"
+    ".balign 4\n"
+    "gdbBreak:\n\t"
+    "teq $0, $0\n\t"
+    "jr $ra\n\t"
+    "nop\n\t"
+);
