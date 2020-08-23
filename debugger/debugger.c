@@ -12,7 +12,7 @@
 
 #define GDB_STACKSIZE           0x400
 #define GDB_DEBUGGER_THREAD_ID  0xDBDB
-#define GDB_CHECKS_PER_SEC      10
+#define GDB_CHECKS_PER_SEC      2
 
 #define GDB_BRANCH_DELAY        0x80000000
 
@@ -373,7 +373,7 @@ enum GDBError gdbReplyRegisters() {
         current += sprintf(current, "%08x%08x", 0, thread->context.cause);
         if (thread->context.pc == (u32)gdbBreak) {
             // when inside gdbBreak, report the breakpoint to be at where the function was called
-            current += sprintf(current, "%08x%08x", 0, (u32)thread->context.ra - 8);
+            current += sprintf(current, "%08x%08x", 0, (u32)thread->context.ra);
         } else {
             current += sprintf(current, "%08x%08x", 0, thread->context.pc);
         }
@@ -692,12 +692,14 @@ void gdbDebuggerLoop(void *arg) {
 
     gdbRunFlags |= GDB_IS_ATTACHED;
     while (gdbRunFlags & GDB_IS_ATTACHED) {
-        OSMesg msg;
-        osRecvMesg(&gdbPollMesgQ, &msg, OS_MESG_BLOCK);
         while (gdbCheckForPacket() == GDBErrorNone);
 
         if (gdbRunFlags & GDB_IS_WAITING_STOP) {
             int i;
+            OSMesg msg;
+            // while program is running, decrease polling rate
+            osRecvMesg(&gdbPollMesgQ, &msg, OS_MESG_BLOCK);
+
             for (i = 0; i < MAX_DEBUGGER_THREADS; ++i) {
                 if (gdbTargetThreads[i] && (gdbTargetThreads[i]->flags & OS_FLAG_FAULT)) {
                     gdbRunFlags &= ~GDB_IS_WAITING_STOP;
