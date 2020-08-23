@@ -204,10 +204,10 @@ server.on('connection', function(socket) {
             gdbChunk = chunk;
         }
 
-        // Ensure only complete gdb messages are sent
-        let messageEnd = gdbChunk.indexOf('#');
-
         serialPortPromise.then(serialPort => {
+            // Ensure only complete gdb messages are sent
+            let messageEnd = gdbChunk.indexOf('#');
+
             while (messageEnd != -1 && messageEnd + 3 <= gdbChunk.length) {
                 serialPort.sendMessage(MESSAGE_TYPE_GDB, gdbChunk.slice(0, messageEnd + 3));
                 gdbChunk = gdbChunk.slice(messageEnd + 3);

@@ -99,23 +99,12 @@ enum GDBError gdbDMAWrite(void* ram, u32 piAddress, u32 len) {
     return GDBErrorNone;
 }
 
-enum GDBError gdbReadReg(enum GDBEVRegister reg, u32* result) {
-    union {
-        long long __align;
-        u32 alignedResult;
-    } uResult;
-    enum GDBError err = gdbDMARead(&uResult.alignedResult, REG_ADDR(reg), sizeof(u32));
-    *result = uResult.alignedResult;
-    return err;
+u32 gdbReadReg(enum GDBEVRegister reg) {
+    return *((u32*)REG_ADDR(reg));
 }
 
-enum GDBError gdbWriteReg(enum GDBEVRegister reg, u32 value) {
-    union {
-        long long __align;
-        u32 alignedResult;
-    } uResult;
-    uResult.alignedResult = value;
-    return gdbDMAWrite(&uResult.alignedResult, REG_ADDR(reg), sizeof(u32));
+void gdbWriteReg(enum GDBEVRegister reg, u32 value) {
+    *((u32*)REG_ADDR(reg)) = value;
 }
 
 enum GDBError gdbUsbBusy() {
@@ -125,26 +114,22 @@ enum GDBError gdbUsbBusy() {
 
     do {
         if (tout++ > 8192) {
-            err = gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD_NOP);
-            if (err != GDBErrorNone) return err;
+            gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD_NOP);
             return GDBErrorUSBTimeout;
         }
-        err = gdbReadReg(GDB_EV_REGISTER_USB_CFG, &registerValue);
-        if (err != GDBErrorNone) return err;
+        registerValue = gdbReadReg(GDB_EV_REGISTER_USB_CFG);
     } while ((registerValue & USB_STA_ACT) != 0);
 
     return GDBErrorNone;
 }
 
 u8 gdbSerialCanRead() {
-    u32 status;
-    return gdbReadReg(GDB_EV_REGISTER_USB_CFG, &status) == GDBErrorNone && (status & (USB_STA_PWR | USB_STA_RXF)) == USB_STA_PWR;
+    return (gdbReadReg(GDB_EV_REGISTER_USB_CFG) & (USB_STA_PWR | USB_STA_RXF)) == USB_STA_PWR;
 }
 
 
 u8 gdbSerialCanWrite() {
-    u32 status;
-    return gdbReadReg(GDB_EV_REGISTER_USB_CFG, &status) == GDBErrorNone && (status & (USB_STA_PWR | USB_STA_TXE)) == USB_STA_PWR;
+    return (gdbReadReg(GDB_EV_REGISTER_USB_CFG) & (USB_STA_PWR | USB_STA_TXE)) == USB_STA_PWR;
 }
 
 enum GDBError gdbWaitForWritable() {
@@ -176,12 +161,9 @@ enum GDBError gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ)
 
     osCreateMesgQueue(&gdbSerialSemaphore, &gdbSerialSemaphoreMsg, 1);
 
-    enum GDBError err = gdbWriteReg(GDB_EV_REGISTER_KEY, 0xAA55);
-    if (err != GDBErrorNone) return err;
-    err = gdbWriteReg(GDB_EV_REGISTER_SYS_CFG, 0);
-    if (err != GDBErrorNone) return err;
-    err = gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD_NOP);
-    if (err != GDBErrorNone) return err;
+    gdbWriteReg(GDB_EV_REGISTER_KEY, 0xAA55);
+    gdbWriteReg(GDB_EV_REGISTER_SYS_CFG, 0);
+    gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD_NOP);
 
     while (gdbSerialCanRead()) {
         gdbSerialRead(gdbSerialReadBuffer, GDB_USB_SERIAL_SIZE);
@@ -196,10 +178,9 @@ enum GDBError gdbSerialRead(char* target, u32 len) {
         }
         int baddr = GDB_USB_SERIAL_SIZE - chunkSize;
 
-        enum GDBError err = gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD | baddr);
-        if (err != GDBErrorNone) return err;
+        gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD | baddr);
 
-        err = gdbUsbBusy();
+        enum GDBError err = gdbUsbBusy();
         if (err != GDBErrorNone) return err;
 
         err = gdbDMARead(target, REG_ADDR(GDB_EV_REGISTER_USB_DATA + baddr), chunkSize);
@@ -227,8 +208,7 @@ enum GDBError gdbSerialWrite(char* src, u32 len) {
         err = gdbDMAWrite(src, REG_ADDR(GDB_EV_REGISTER_USB_DATA + baddr), chunkSize);
         if (err != GDBErrorNone) return err;
 
-        err = gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_WR | baddr);
-        if (err != GDBErrorNone) return err;
+        gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_WR | baddr);
 
         err = gdbUsbBusy();
         if (err != GDBErrorNone) return err;
