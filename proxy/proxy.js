@@ -188,6 +188,21 @@ if (eagerSerial) {
     openSerialConnection();
 }
 
+function findMessageEnd(buffer) {
+    let messageEnd = buffer.indexOf('#');
+    let interrupt = buffer.indexOf(0x03);
+
+    if (messageEnd != -1 && interrupt != -1) {
+        return Math.min(messageEnd + 3, interrupt + 1);
+    } else if (messageEnd != -1) {
+        return messageEnd + 3;
+    } else if (interrupt != -1) {
+        return interrupt + 1;
+    } else {
+        return -1;
+    }
+}
+
 server.on('connection', function(socket) {
     console.log('Debugger connected');
 
@@ -206,12 +221,12 @@ server.on('connection', function(socket) {
 
         serialPortPromise.then(serialPort => {
             // Ensure only complete gdb messages are sent
-            let messageEnd = gdbChunk.indexOf('#');
+            let messageEnd = findMessageEnd(gdbChunk);
 
-            while (messageEnd != -1 && messageEnd + 3 <= gdbChunk.length) {
-                serialPort.sendMessage(MESSAGE_TYPE_GDB, gdbChunk.slice(0, messageEnd + 3));
-                gdbChunk = gdbChunk.slice(messageEnd + 3);
-                messageEnd = gdbChunk.indexOf('#');
+            while (messageEnd != -1 && messageEnd <= gdbChunk.length) {
+                serialPort.sendMessage(MESSAGE_TYPE_GDB, gdbChunk.slice(0, messageEnd));
+                gdbChunk = gdbChunk.slice(messageEnd);
+                messageEnd = findMessageEnd(gdbChunk);
             }
         });
     });

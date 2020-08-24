@@ -168,7 +168,6 @@ public	void	mainproc(void *arg)
       healthcheck = 0;
       println("heartbeat");
     }
-    
 
     int line;
 

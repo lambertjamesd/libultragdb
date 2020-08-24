@@ -135,18 +135,28 @@ OSThread* gdbNextThread(OSThread* curr, OSId id) {
     }
 }
 
+int gdbReadHexDigit(char character) {
+    if (character >= 'a' && character <= 'f') {
+        return 10 + character - 'a';
+    } else if (character >= 'A' && character <= 'F') {
+        return 10 + character - 'A';
+    } else if (character >= '0' && character <= '9') {
+        return character - '0';
+    } else {
+        return -1;
+    }   
+}
+
 u32 gdbParseHex(char* src, u32 maxBytes) {
     u32 result = 0;
     int currentChar;
     u32 maxCharacters = maxBytes * 2;
 
     for (currentChar = 0; currentChar < maxCharacters; ++currentChar) {
-        if (*src >= 'a' && *src <= 'f') {
-            result = (result << 4) + 10 + *src - 'a';
-        } else if (*src >= 'A' && *src <= 'F') {
-            result = (result << 4) + 10 + *src - 'A';
-        } else if (*src >= '0' && *src <= '9') {
-            result = (result << 4) + *src - '0';
+        int digit = gdbReadHexDigit(*src);
+
+        if (digit != -1) {
+            result = (result << 4) + digit;
         } else {
             break;
         }
@@ -175,6 +185,27 @@ char* gdbWriteHex(char* target, u8* src, u32 bytes) {
         ++src;
     }
     return target;
+}
+
+char* gdbReadHex(u8* target, char* src, u32 maxBytes) {
+    u32 i;
+    for (i = 0; i < maxBytes; ++i) {
+        int firstDigit = gdbReadHexDigit(*src++);
+
+        if (firstDigit == -1) {
+            return src;
+        } else {
+            int secondDigit = gdbReadHexDigit(*src++);
+
+            if (secondDigit == -1) {
+                *target++ = firstDigit << 4;
+                return src;
+            } else {
+                *target++ = (firstDigit << 4) | secondDigit;
+            }
+        }
+    }
+    return src;
 }
 
 void gdbCopy(char* dst, char* src, int len)
@@ -388,6 +419,34 @@ enum GDBError gdbReplyRegisters() {
     return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
 }
 
+enum GDBError gdbWriteRegisters(char* commandStart, char *packetEnd) {
+    
+    OSThread* thread = gdbFindThread(gdbCurrentThreadg);
+
+    char* current = commandStart + 1;
+    u32 messageLength = (u32)(packetEnd - current);
+
+    if (messageLength != 880) {
+        return GDBErrorBadPacket;
+    }
+
+    if (thread) {
+        current += 16; // zero register
+        current = gdbReadHex((u8*)&thread->context, current, offsetof(__OSThreadContext, gp));
+        current += 32; // k0 and k1
+        current = gdbReadHex((u8*)&thread->context.gp, current, offsetof(__OSThreadContext, lo) - offsetof(__OSThreadContext, gp));
+        current += 8; current = gdbReadHex((u8*)&thread->context.sr, current, sizeof(u32));
+        current = gdbReadHex((u8*)&thread->context.lo, current, sizeof(u64) * 2);
+        current += 8; current = gdbReadHex((u8*)&thread->context.badvaddr, current, sizeof(u32));
+        current += 8; current = gdbReadHex((u8*)&thread->context.cause, current, sizeof(u32));
+        current += 8; current = gdbReadHex((u8*)&thread->context.pc, current, sizeof(u32));
+        current = gdbReadHex((u8*)&thread->context.fp0, current, sizeof(__OSThreadContext) - offsetof(__OSThreadContext, fp0));
+        current += 8; current = gdbReadHex((u8*)&thread->context.fpcsr, current, sizeof(u32));
+    }
+    
+    return gdbSendMessage(GDBDataTypeGDB, "$OK#9a", strlen("$OK#9a"));
+}
+
 enum GDBError gdbReplyMemory(char* commandStart, char *packetEnd) {
     char* current = gdbOutputBuffer;
     *current++ = '$';
@@ -431,6 +490,36 @@ enum GDBError gdbReplyMemory(char* commandStart, char *packetEnd) {
     *current++ = '#';
     *current++ = '\0';
     return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
+}
+
+enum GDBError gdbWriteMemory(char *commandStart, char* packetEnd) {
+    char* current = gdbOutputBuffer;
+    *current++ = '$';
+
+    char* lenText = commandStart + 1;
+
+    while (*lenText != ',') {
+        if (lenText == packetEnd) {
+            return GDBErrorBadPacket;
+        }
+        ++lenText;
+    }
+
+    char* dataText = lenText + 1;
+
+    while (*dataText != ':') {
+        if (dataText == packetEnd) {
+            return GDBErrorBadPacket;
+        }
+        ++dataText;
+    }
+
+    ++dataText;
+
+    u8* dataTarget = (u8*)gdbParseHex(commandStart + 1, 4);
+    u32 len = gdbParseHex(lenText + 1, 4);
+    gdbReadHex(dataTarget, dataText, len);
+    return gdbSendMessage(GDBDataTypeGDB, "$OK#9a", strlen("$OK#9a"));
 }
 
 enum GDBError gdbHandleQuery(char* commandStart, char *packetEnd) {
@@ -563,6 +652,18 @@ enum GDBError gdbHandleV(char* commandStart, char *packetEnd) {
             gdbWaitForStop();
             return GDBErrorNone;
         }
+    } else if (strStartsWith(commandStart, "vKill")) {
+        int i;
+        for (i = 0; i < GDB_MAX_BREAK_POINTS; ++i) {
+            gdbRemoveBreakpoint(&gdbBreakpoints[i]);
+        }
+        for (i = 0; i < MAX_DEBUGGER_THREADS; ++i) {
+            if (gdbTargetThreads[i] && gdbTargetThreads[i]->state == OS_STATE_STOPPED) {
+                gdbResumeThread(gdbTargetThreads[i]);
+            }
+        }
+        gdbRunFlags &= ~GDB_IS_ATTACHED;
+        return gdbSendMessage(GDBDataTypeGDB, "$OK#9a", strlen("$OK#9a"));
     }
 
     println("Unknown v packet");
@@ -607,8 +708,12 @@ enum GDBError gdbHandlePacket(char* commandStart, char *packetEnd) {
             return gdbSendStopReply(gdbFindThread(GDB_ANY_THREAD));
         case 'g':
             return gdbReplyRegisters();
+        case 'G':
+            return gdbWriteRegisters(commandStart, packetEnd);
         case 'm':
             return gdbReplyMemory(commandStart, packetEnd);
+        case 'M':
+            return gdbWriteMemory(commandStart, packetEnd);
         case 'D':
             gdbRunFlags &= ~GDB_IS_ATTACHED;
             return gdbSendMessage(GDBDataTypeGDB, "$OK#9a", strlen("$OK#9a"));
@@ -654,14 +759,26 @@ enum GDBError gdbCheckForPacket() {
         if (err != GDBErrorNone) return err;
 
         if (type == GDBDataTypeGDB) {
-            err = gdbParsePacket(gdbPacketBuffer, len, &commandStart, &packetEnd);
-            if (err != GDBErrorNone) return err;
+            if (*gdbPacketBuffer == 0x03) {
+                if (gdbRunFlags & GDB_IS_WAITING_STOP) {
+                    OSThread* targetThread = gdbFindThread(GDB_ANY_THREAD);
 
-            err = gdbSendMessage(GDBDataTypeGDB, "+", strlen("+"));
-            if (err != GDBErrorNone) return err;
+                    if (targetThread) {
+                        osStopThread(targetThread);
+                        gdbRunFlags &= ~GDB_IS_WAITING_STOP;
+                        gdbSendStopReply(targetThread);
+                    }
+                }
+            } else {
+                err = gdbParsePacket(gdbPacketBuffer, len, &commandStart, &packetEnd);
+                if (err != GDBErrorNone) return err;
 
-            err = gdbHandlePacket(commandStart, packetEnd);
-            if (err != GDBErrorNone) return err;
+                err = gdbSendMessage(GDBDataTypeGDB, "+", strlen("+"));
+                if (err != GDBErrorNone) return err;
+
+                err = gdbHandlePacket(commandStart, packetEnd);
+                if (err != GDBErrorNone) return err;
+            }
         }
 
         return GDBErrorNone;
