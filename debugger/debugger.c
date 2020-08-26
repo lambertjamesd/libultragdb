@@ -12,7 +12,9 @@
 
 #define GDB_STACKSIZE           0x400
 #define GDB_DEBUGGER_THREAD_ID  0xDBDB
-#define GDB_CHECKS_PER_SEC      2
+#define GDB_POLL_DELAY          (OS_CPU_COUNTER / 2)
+#define GDB_QUICK_POLL_DELAY    (OS_CPU_COUNTER / 100)
+#define GDB_QUICK_POLL_COUNT    20
 
 #define GDB_BRANCH_DELAY        0x80000000
 
@@ -45,6 +47,7 @@ static char gdbOutputBuffer[MAX_PACKET_SIZE];
 static int gdbNextBufferTarget;
 static int gdbNextSearchIndex;
 static int gdbRunFlags;
+static int gdbQuickPollCount;
 
 static OSThread gdbDebuggerThread;
 static u64 gdbDebuggerThreadStack[GDB_STACKSIZE/sizeof(u64)];
@@ -54,6 +57,9 @@ static OSMesgQueue gdbPollMesgQ;
 static OSMesg gdbPollMesgQMessage;
 
 static struct GDBBreakpoint gdbBreakpoints[GDB_MAX_BREAK_POINTS];
+
+void __gdbSetWatch(u32 value);
+u32 __gdbGetWatch();
 
 static int gdbSignals[32] = {
     2, // SIGINT
@@ -377,10 +383,18 @@ void gdbResumeThread(OSThread* thread) {
         // hacky way to skip breakpoint instruction
         thread->context.pc = (u32)thread->context.ra;
     }
+    if ((GDB_GET_EXC_CODE(thread->context.cause) & CAUSE_EXCMASK) == EXC_WATCH) {
+        // TODO restore watch point
+        __gdbSetWatch(0);
+    }
     gdbDisableBreakpoint(gdbFindBreakpoint(thread->context.pc));
     // clear fault flag
     thread->flags &= ~OS_FLAG_FAULT;
 
+    // step commands will frequently string to together a lot
+    // of nearby breakpoints. This is to make sure stepping
+    // doesn't cause a huge delay
+    gdbQuickPollCount = GDB_QUICK_POLL_COUNT;
     osStartThread(thread);
 }
 
@@ -448,6 +462,9 @@ enum GDBError gdbWriteRegisters(char* commandStart, char *packetEnd) {
 }
 
 enum GDBError gdbReplyMemory(char* commandStart, char *packetEnd) {
+    u32 prevWatch = __gdbGetWatch();
+    // clear the watch so the debugger thread doesn't get the interrupt
+    __gdbSetWatch(0);
     char* current = gdbOutputBuffer;
     *current++ = '$';
 
@@ -489,10 +506,14 @@ enum GDBError gdbReplyMemory(char* commandStart, char *packetEnd) {
 
     *current++ = '#';
     *current++ = '\0';
+    __gdbSetWatch(prevWatch);
     return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
 }
 
 enum GDBError gdbWriteMemory(char *commandStart, char* packetEnd) {
+    u32 prevWatch = __gdbGetWatch();
+    // clear the watch so the debugger thread doesn't get the interrupt
+    __gdbSetWatch(0);
     char* current = gdbOutputBuffer;
     *current++ = '$';
 
@@ -519,6 +540,7 @@ enum GDBError gdbWriteMemory(char *commandStart, char* packetEnd) {
     u8* dataTarget = (u8*)gdbParseHex(commandStart + 1, 4);
     u32 len = gdbParseHex(lenText + 1, 4);
     gdbReadHex(dataTarget, dataText, len);
+    __gdbSetWatch(prevWatch);
     return gdbSendMessage(GDBDataTypeGDB, "$OK#9a", strlen("$OK#9a"));
 }
 
@@ -799,19 +821,18 @@ void gdbErrorHandler(s16 code, s16 numArgs, ...) {
 
 void gdbDebuggerLoop(void *arg) {
     osCreateMesgQueue(&gdbPollMesgQ, &gdbPollMesgQMessage, 1);
-    osSetTimer(
-        &gdbPollTimer, 
-        OS_CPU_COUNTER / GDB_CHECKS_PER_SEC, 
-        OS_CPU_COUNTER / GDB_CHECKS_PER_SEC, 
-        &gdbPollMesgQ, 
-        NULL
-    );
 
     gdbRunFlags |= GDB_IS_ATTACHED;
     while (gdbRunFlags & GDB_IS_ATTACHED) {
         while (gdbCheckForPacket() == GDBErrorNone);
 
         if (gdbRunFlags & GDB_IS_WAITING_STOP) {
+            osSetTimer(&gdbPollTimer, gdbQuickPollCount ? GDB_QUICK_POLL_DELAY : GDB_POLL_DELAY, 0, &gdbPollMesgQ, NULL);
+
+            if (gdbQuickPollCount > 0) {
+                --gdbQuickPollCount;
+            }
+
             int i;
             OSMesg msg;
             // while program is running, decrease polling rate
@@ -861,14 +882,40 @@ enum GDBError gdbInitDebugger(OSPiHandle* handler, OSMesgQueue* dmaMessageQ, OST
 
 }
 
+void* getWatchPoint() {
+    return (void*)(__gdbGetWatch() & ~0x7);
+}
+
+void gdbSetWatchPoint(void* addr, int read, int write) {
+    __gdbSetWatch(((u32)addr & 0x1ffffff8) | (read ? 0x2 : 0) | (write ? 0x1 : 0));
+}
+
+void gdbClearWatchPoint() {
+    __gdbSetWatch(0);
+}
+
 /**
  * Implement gdbBreak in assembly to ensure that `teq` is the first instruction of the function
  */
 asm(
-    ".global gdbBreak\n\t"
-    ".balign 4\n"
-    "gdbBreak:\n\t"
-    "teq $0, $0\n\t"
-    "jr $ra\n\t"
-    "nop\n\t"
+".global gdbBreak\n"
+".balign 4\n"
+"gdbBreak:\n"
+    "teq $0, $0\n"
+    "jr $ra\n"
+    "nop\n"
+
+".global __gdbSetWatch\n"
+".balign 4\n"
+"__gdbSetWatch:\n"
+    "MTC0 $a0, $18\n"
+    "jr $ra\n"
+    "nop\n"
+
+".global __gdbGetWatch\n"
+".balign 4\n"
+"__gdbGetWatch:\n"
+    "MFC0 $v0, $18\n"
+    "jr $ra\n"
+    "nop\n"
 );

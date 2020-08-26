@@ -24,4 +24,8 @@ enum GDBError gdbInitDebugger(OSPiHandle* handler, OSMesgQueue* dmaMessageQ, OST
 enum GDBError gdbCheckForPacket();
 void gdbBreak();
 
+void* getWatchPoint();
+void gdbSetWatchPoint(void* addr, int read, int write);
+void gdbClearWatchPoint();
+
 #endif

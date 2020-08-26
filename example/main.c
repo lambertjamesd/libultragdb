@@ -117,6 +117,8 @@ void start_display(void)
   } 
 }
 
+u32 __gdbGetWatch();
+
 static long long __align;
 char gTmpBuffer[0x1000];
 
@@ -158,6 +160,7 @@ public	void	mainproc(void *arg)
     hold = lastbutton;
 
     if (trig) {
+      // gdbSetWatchPoint(textGrid, 1, 1);
       gdbBreak();
     }
 
