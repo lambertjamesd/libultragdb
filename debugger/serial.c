@@ -168,6 +168,8 @@ enum GDBError gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ)
     while (gdbSerialCanRead()) {
         gdbSerialRead(gdbSerialReadBuffer, GDB_USB_SERIAL_SIZE);
     }
+
+    return GDBErrorNone;
 }
 
 enum GDBError gdbSerialRead(char* target, u32 len) {
