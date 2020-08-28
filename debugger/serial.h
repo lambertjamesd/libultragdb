@@ -32,6 +32,9 @@ enum GDBError gdbSerialRead(char* target, u32 len);
 enum GDBError gdbSerialWrite(char* src, u32 len);
 
 enum GDBError gdbSendMessage(enum GDBDataType type, char* src, u32 len);
-enum GDBError gdbPollMessage(enum GDBDataType* type, char* target, u32* len, u32 maxLen);
+
+enum GDBError gdbPollHeader(enum GDBDataType* type, u32* len);
+enum GDBError gdbReadData(char* target, u32 len, u32* dataRead);
+enum GDBError gdbFinishRead();
 
 #endif

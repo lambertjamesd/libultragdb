@@ -33,7 +33,10 @@ static OSMesgQueue* __gdbDmaMessageQ;
 #define MESSAGE_HEADER_SIZE     8
 #define MESSAGE_FOOTER_SIZE     4
 
+#define GDB_IS_READING  1
+
 #define ALIGN_16_BYTES(input)   (((input) + 0xF) & ~0xF)
+#define ALIGN_8_BYTES(input)   (((input) + 0x7) & ~0x7)
 #define ALIGN_2_BYTES(input)   (((input) + 0x1) & ~0x1)
 
 #define USB_MIN_SIZE            16
@@ -41,7 +44,7 @@ static OSMesgQueue* __gdbDmaMessageQ;
 extern void println(char* text);
 
 // used to ensure that the memory buffers are aligned to 8 bytes
-long long __gdbUnusedAlign;
+long long __gdbAlignAndFlags;
 char gdbSerialSendBuffer[GDB_USB_SERIAL_SIZE];
 char gdbSerialReadBuffer[GDB_USB_SERIAL_SIZE];
 static OSPiHandle gdbSerialHandle;
@@ -300,8 +303,11 @@ enum GDBError gdbSendMessage(enum GDBDataType type, char* src, u32 len) {
     return result;
 }
 
-enum GDBError gdbPollMessageHeader(enum GDBDataType* type, u32* len)
-{
+static u32 gdbReadHead;
+static u32 gdbMaxReadHead;
+static u32 gdbRemainingLen;
+
+enum GDBError gdbPollHeader(enum GDBDataType* type, u32* len) {
     if (!gdbSerialCanRead()) {
         return GDBErrorUSBNoData;
     }
@@ -311,87 +317,97 @@ enum GDBError gdbPollMessageHeader(enum GDBDataType* type, u32* len)
 
     if (strncmp(gdbSerialReadBuffer, gdbHeaderText, HEADER_TEXT_LENGTH) == 0) {
         *type = gdbSerialReadBuffer[4];
-        *len = 0xFFFFFF & *((u32*)&gdbSerialReadBuffer[4]);
+        gdbRemainingLen = 0xFFFFFF & *((u32*)&gdbSerialReadBuffer[4]);
+        *len = gdbRemainingLen;
+        gdbReadHead = MESSAGE_HEADER_SIZE;
+        gdbMaxReadHead = USB_MIN_SIZE;
+        __gdbAlignAndFlags |= GDB_IS_READING;
+
+        u32 dataWithLength = gdbRemainingLen + MESSAGE_HEADER_SIZE + MESSAGE_FOOTER_SIZE;
         return GDBErrorNone;
     }
 
     return GDBErrorUSBNoData;
 }
 
-enum GDBError gdbReadMessage(char* target, u32 len)
-{
-    u32 chunkSize = len;
-    u32 initialLen = len;
-    
-    if (chunkSize > USB_MIN_SIZE - MESSAGE_HEADER_SIZE) {
-        chunkSize = USB_MIN_SIZE - MESSAGE_HEADER_SIZE;
+enum GDBError gdbReadData(char* target, u32 len, u32* dataRead) {
+    if (len > gdbRemainingLen) {
+        len = gdbRemainingLen;
     }
 
-    // copy the last 0-8 bytes of data from when the header was read
-    memcpy(target, &gdbSerialReadBuffer[MESSAGE_HEADER_SIZE], chunkSize);
-    target += chunkSize;
-    len -= chunkSize;
+    u32 pendingData = gdbMaxReadHead - gdbReadHead;
+    *dataRead = 0;
 
-    // check the footer for messages 0-4 characters long
-    if (USB_MIN_SIZE >= MESSAGE_FOOTER_SIZE + MESSAGE_HEADER_SIZE + chunkSize) {
-        return strncmp(&gdbSerialReadBuffer[MESSAGE_HEADER_SIZE + chunkSize], gdbFooterText, MESSAGE_FOOTER_SIZE) == 0 ? GDBErrorNone : GDBErrorBadFooter;
+    if (len <= pendingData) {
+        memcpy(target, &gdbSerialReadBuffer[gdbReadHead], len);
+        gdbReadHead += len;
+        gdbRemainingLen -= len;
+        *dataRead += len;
+        return GDBErrorNone;
     }
+
+    if (pendingData > 0) {
+        memcpy(target, &gdbSerialReadBuffer[gdbReadHead], pendingData);
+        target += pendingData;
+        len -= pendingData;
+        *dataRead += pendingData;
+        gdbRemainingLen -= pendingData;
+    }
+
+    gdbReadHead = 0;
+    gdbMaxReadHead = 0;
 
     enum GDBError err;
 
-    // read data in chunks of 512 bytes
     while (len > GDB_USB_SERIAL_SIZE) {
-        // check if target is aligned for direct dma
-        if ((u32)target == ((u32)target & ~0x7)) {
-            err = gdbSerialRead(target, GDB_USB_SERIAL_SIZE);
-            if (err != GDBErrorNone)  return err;
+        // if data is aligned, read directly into the buffer
+        if ((u32)target == ALIGN_8_BYTES((u32)target)) {
+            u32 bytesToRead = len & ~0x1FF;
+            err = gdbSerialRead(target, bytesToRead);
+            if (err != GDBErrorNone) return err;
+            len -= bytesToRead;
+            gdbRemainingLen -= bytesToRead;
+            *dataRead += bytesToRead;
+            target += bytesToRead;
         } else {
             err = gdbSerialRead(gdbSerialReadBuffer, GDB_USB_SERIAL_SIZE);
-            if (err != GDBErrorNone)  return err;
+            if (err != GDBErrorNone) return err;
             memcpy(target, gdbSerialReadBuffer, GDB_USB_SERIAL_SIZE);
-        }
-        target += GDB_USB_SERIAL_SIZE;
-        len -= GDB_USB_SERIAL_SIZE;
-    }
-
-    u32 footerStart;
-
-    if (len > 0) {
-        chunkSize = ALIGN_16_BYTES(len + MESSAGE_FOOTER_SIZE);
-        if (chunkSize > GDB_USB_SERIAL_SIZE) {
-            chunkSize = GDB_USB_SERIAL_SIZE;
-        }
-
-        err = gdbSerialRead(gdbSerialReadBuffer, chunkSize);
-        if (err != GDBErrorNone)  return err;
-        memcpy(target, gdbSerialReadBuffer, len);
-
-        footerStart = len;
-        chunkSize -= len;
-    } else {
-        if (initialLen + MESSAGE_HEADER_SIZE < USB_MIN_SIZE) {
-            chunkSize = USB_MIN_SIZE - initialLen - MESSAGE_HEADER_SIZE;
-            footerStart = MESSAGE_HEADER_SIZE + initialLen;
-        } else {
-            chunkSize = 0;
-            footerStart = 0;
+            len -= GDB_USB_SERIAL_SIZE;
+            gdbRemainingLen -= GDB_USB_SERIAL_SIZE;
+            *dataRead += GDB_USB_SERIAL_SIZE;
+            target += GDB_USB_SERIAL_SIZE;
         }
     }
 
+    u32 dataToRead = ALIGN_16_BYTES(gdbRemainingLen + MESSAGE_FOOTER_SIZE);
 
-    if (chunkSize > MESSAGE_FOOTER_SIZE) {
-        chunkSize = MESSAGE_FOOTER_SIZE;
+    if (dataToRead > GDB_USB_SERIAL_SIZE) {
+        dataToRead = GDB_USB_SERIAL_SIZE;
     }
 
-    if (chunkSize > 0 && strncmp(&gdbSerialReadBuffer[footerStart], gdbFooterText, chunkSize) != 0) {
-        return GDBErrorBadFooter;
-    }
+    err = gdbSerialRead(gdbSerialReadBuffer, dataToRead);
+    if (err != GDBErrorNone) return err;
 
-    if (chunkSize < MESSAGE_FOOTER_SIZE) {
-        err = gdbSerialRead(gdbSerialReadBuffer, USB_MIN_SIZE);
-        if (err != GDBErrorNone)  return err;
-        
-        if (strncmp(gdbSerialReadBuffer, &gdbFooterText[chunkSize], MESSAGE_FOOTER_SIZE - chunkSize) != 0) {
+    gdbMaxReadHead = dataToRead;
+
+    memcpy(target, gdbSerialReadBuffer, len);
+    gdbReadHead += len;
+    gdbRemainingLen -= len;
+    *dataRead += len;
+
+    if (gdbRemainingLen == 0 && (__gdbAlignAndFlags & GDB_IS_READING)) {
+        gdbRemainingLen = MESSAGE_FOOTER_SIZE;
+        // this prevents an infinite loop when reading the footer
+        __gdbAlignAndFlags &= ~GDB_IS_READING;
+        char footerCheck[4];
+        u32 footerDataRead;
+        err = gdbReadData(footerCheck, MESSAGE_FOOTER_SIZE, &footerDataRead);
+        if (err != GDBErrorNone) return err;
+        gdbRemainingLen = 0;
+
+        if (footerDataRead == MESSAGE_FOOTER_SIZE && 
+            strncmp(gdbFooterText, footerCheck, MESSAGE_FOOTER_SIZE) != 0) {
             return GDBErrorBadFooter;
         }
     }
@@ -399,25 +415,17 @@ enum GDBError gdbReadMessage(char* target, u32 len)
     return GDBErrorNone;
 }
 
-enum GDBError __gdbPollMessage(enum GDBDataType* type, char* target, u32* len, u32 maxLen) {
-    enum GDBError err = gdbPollMessageHeader(type, len);
-    if (err != GDBErrorNone)  return err;
-
-    if (*len > maxLen) {
-        // TODO flush buffer
-        return GDBErrorBufferTooSmall;
+enum GDBError gdbFinishRead() {
+    u32 actuallyRead;
+    enum GDBError err;
+    while (gdbRemainingLen > 0) {
+        if (gdbRemainingLen > GDB_USB_SERIAL_SIZE) {
+            err = gdbReadData(gdbSerialReadBuffer, GDB_USB_SERIAL_SIZE, &actuallyRead);
+            if (err != GDBErrorNone) return err;
+        } else {
+            err = gdbReadData(gdbSerialReadBuffer, gdbRemainingLen, &actuallyRead);
+            if (err != GDBErrorNone) return err;
+        }
     }
-
-    err = gdbReadMessage(target, *len);
-    if (err != GDBErrorNone)  return err;
-
     return GDBErrorNone;
-}
-
-enum GDBError gdbPollMessage(enum GDBDataType* type, char* target, u32* len, u32 maxLen) {
-    OSMesg msg = 0;
-    osSendMesg(&gdbSerialSemaphore, msg, OS_MESG_BLOCK);
-    enum GDBError result = __gdbPollMessage(type, target, len, maxLen);
-    osRecvMesg(&gdbSerialSemaphore, &msg, OS_MESG_NOBLOCK);
-    return result;
 }

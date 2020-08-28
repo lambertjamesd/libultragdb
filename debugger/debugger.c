@@ -776,8 +776,12 @@ enum GDBError gdbCheckForPacket() {
     if (gdbSerialCanRead()) {
         enum GDBDataType type;
         u32 len;
-        enum GDBError err = gdbPollMessage(&type, gdbPacketBuffer, &len, MAX_PACKET_SIZE);
+        enum GDBError err = gdbPollHeader(&type, &len);
+        if (err != GDBErrorNone) return err;
         gdbPacketBuffer[len] = '\0';
+        err = gdbReadData(gdbPacketBuffer, len, &len);
+        if (err != GDBErrorNone) return err;
+        err = gdbFinishRead();
         if (err != GDBErrorNone) return err;
 
         if (type == GDBDataTypeGDB) {
