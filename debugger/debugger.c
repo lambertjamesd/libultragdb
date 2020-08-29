@@ -880,6 +880,7 @@ enum GDBError gdbInitDebugger(OSPiHandle* handler, OSMesgQueue* dmaMessageQ, OST
 
     if (primaryThread != NULL) {
         osStopThread(primaryThread);
+        gdbBreak();
     }
     
     return GDBErrorNone;
