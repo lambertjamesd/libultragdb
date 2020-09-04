@@ -223,7 +223,7 @@ enum GDBError gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ)
     gdbSerialHandle = *handler;
 
     volatile u32* cen64Check = (volatile u32*)(0xA0000000 | 0x18000004);
-    if (*cen64Check == 0xcece || 1) {
+    if (*cen64Check == 0xcece) {
         gdbSerialCanRead = gdbSerialCanRead_cen64;
         gdbSerialRead = gdbSerialRead_cen64;
         gdbSerialWrite = gdbSerialWrite_cen64;
