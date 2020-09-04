@@ -172,35 +172,34 @@ function createSerialPort(devName, onReceiveMessage) {
 function createTCPConnection(address, onReceiveMessage) {
     return new Promise((resolve, reject) => {   
         const parts = address.split(':', 2);
-        const socket = net.createConnection(+parts[1], parts[0], () => {
-            const result = {
-                sendMessage: (type, buffer) => {
-                    const message = formatMessage(type, buffer);
-                    if (verbose) {
-                        console.log(`Sending message to cart: ${type} ${buffer.toString()}`)
-                    }
-                    socket.write(writeFd, message, (err) => {
-                        if (err) {
-                            console.error(err);
-                        }
-                    });
-                },
-                onReceiveMessage: onReceiveMessage,
-                close: () => {
-                    socket.destroy();
-                },
-            };
+        const socket = net.createConnection(+parts[1], parts[0]);
 
-            socket.on('connect', () => {
-                console.log(`Connected to ${address}`);
-            });
-            
-            socket.on('error', (err) => {
-                console.log(`Error on socket ${err}`);
-            });
+        const result = {
+            sendMessage: (type, buffer) => {
+                const message = formatMessage(type, buffer);
+                if (verbose) {
+                    console.log(`Sending message to cart: ${type} ${buffer.toString()}`)
+                }
+                socket.write(message);
+            },
+            onReceiveMessage: onReceiveMessage,
+            close: () => {
+                socket.destroy();
+            },
+        };
 
-            socket.on('data', onDataCallback(result));
+        socket.on('connect', () => {
+            console.log(`Connected to ${address}`);
         });
+        
+        socket.on('error', (err) => {
+            console.log(`Error on socket ${err}`);
+            reject(err);
+        });
+
+        socket.on('data', onDataCallback(result));
+
+        resolve(result);
     });
 }
 

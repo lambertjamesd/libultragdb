@@ -54,6 +54,10 @@ static OSMesg gdbSerialSemaphoreMsg;
 static char gdbHeaderText[] = "DMA@";
 static char gdbFooterText[] = "CMPH";
 
+u8 (*gdbSerialCanRead)();
+enum GDBError (*gdbSerialRead)(char* target, u32 len);
+enum GDBError (*gdbSerialWrite)(char* src, u32 len);
+
 enum GDBEVRegister {
     GDB_EV_REGISTER_USB_CFG = 0x0004,
     GDB_EV_REGISTER_USB_TIMER = 0x000C,
@@ -126,56 +130,11 @@ enum GDBError gdbUsbBusy() {
     return GDBErrorNone;
 }
 
-u8 gdbSerialCanRead() {
+u8 gdbSerialCanRead_X7() {
     return (gdbReadReg(GDB_EV_REGISTER_USB_CFG) & (USB_STA_PWR | USB_STA_RXF)) == USB_STA_PWR;
 }
 
-
-u8 gdbSerialCanWrite() {
-    return (gdbReadReg(GDB_EV_REGISTER_USB_CFG) & (USB_STA_PWR | USB_STA_TXE)) == USB_STA_PWR;
-}
-
-enum GDBError gdbWaitForWritable() {
-    u32 timeout = 0;
-
-    while (!gdbSerialCanWrite()) {
-        if (++timeout == 8192) {
-            return GDBErrorUSBTimeout;
-        }
-    }
-
-    return GDBErrorNone;
-}
-
-enum GDBError gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ)
-{
-    gdbSerialHandle = *handler;
-
-    gdbSerialHandle.latency = 0x04;
-    gdbSerialHandle.pulse = 0x0C;
-
-    OSIntMask prev = osGetIntMask();
-    osSetIntMask(0);
-    gdbSerialHandle.next = __osPiTable;
-    __osPiTable = &gdbSerialHandle;
-    osSetIntMask(prev);
-
-    __gdbDmaMessageQ = dmaMessageQ;
-
-    osCreateMesgQueue(&gdbSerialSemaphore, &gdbSerialSemaphoreMsg, 1);
-
-    gdbWriteReg(GDB_EV_REGISTER_KEY, 0xAA55);
-    gdbWriteReg(GDB_EV_REGISTER_SYS_CFG, 0);
-    gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD_NOP);
-
-    while (gdbSerialCanRead()) {
-        gdbSerialRead(gdbSerialReadBuffer, GDB_USB_SERIAL_SIZE);
-    }
-
-    return GDBErrorNone;
-}
-
-enum GDBError gdbSerialRead(char* target, u32 len) {
+enum GDBError gdbSerialRead_X7(char* target, u32 len) {
     while (len) {
         int chunkSize = GDB_USB_SERIAL_SIZE;
         if (chunkSize > len) {
@@ -198,7 +157,23 @@ enum GDBError gdbSerialRead(char* target, u32 len) {
     return GDBErrorNone;
 }
 
-enum GDBError gdbSerialWrite(char* src, u32 len) {
+u8 gdbSerialCanWrite() {
+    return (gdbReadReg(GDB_EV_REGISTER_USB_CFG) & (USB_STA_PWR | USB_STA_TXE)) == USB_STA_PWR;
+}
+
+enum GDBError gdbWaitForWritable() {
+    u32 timeout = 0;
+
+    while (!gdbSerialCanWrite()) {
+        if (++timeout == 8192) {
+            return GDBErrorUSBTimeout;
+        }
+    }
+
+    return GDBErrorNone;
+}
+
+enum GDBError gdbSerialWrite_X7(char* src, u32 len) {
     enum GDBError err = gdbWaitForWritable();
     if (err != GDBErrorNone) return err;
 
@@ -221,6 +196,60 @@ enum GDBError gdbSerialWrite(char* src, u32 len) {
         src += chunkSize;
         len -= chunkSize;
     }
+
+    return GDBErrorNone;
+}
+
+u8 gdbSerialCanRead_cen64() {
+    return 1;
+}
+
+enum GDBError gdbSerialRead_cen64(char* target, u32 len) {
+    // while (len--) {
+    //     *target++ = *((volatile u32*)(0xA0000000 | 0x18000000));
+    // }
+    return GDBErrorNone;
+}
+
+enum GDBError gdbSerialWrite_cen64(char* target, u32 len) {
+    while (len--) {
+        *((volatile u32*)(0xA0000000 | 0x18000000)) = *target++;
+    }
+    return GDBErrorNone;
+}
+
+enum GDBError gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ)
+{
+    gdbSerialHandle = *handler;
+
+    volatile u32* cen64Check = (volatile u32*)(0xA0000000 | 0x18000004);
+    if (*cen64Check == 0xcece || 1) {
+        gdbSerialCanRead = gdbSerialCanRead_cen64;
+        gdbSerialRead = gdbSerialRead_cen64;
+        gdbSerialWrite = gdbSerialWrite_cen64;
+    } else {
+        gdbSerialCanRead = gdbSerialCanRead_X7;
+        gdbSerialRead = gdbSerialRead_X7;
+        gdbSerialWrite = gdbSerialWrite_X7;
+
+        gdbSerialHandle.latency = 0x04;
+        gdbSerialHandle.pulse = 0x0C;
+
+        OSIntMask prev = osGetIntMask();
+        osSetIntMask(0);
+        gdbSerialHandle.next = __osPiTable;
+        __osPiTable = &gdbSerialHandle;
+        osSetIntMask(prev);
+
+        __gdbDmaMessageQ = dmaMessageQ;
+
+        osCreateMesgQueue(&gdbSerialSemaphore, &gdbSerialSemaphoreMsg, 1);
+
+        gdbWriteReg(GDB_EV_REGISTER_KEY, 0xAA55);
+        gdbWriteReg(GDB_EV_REGISTER_SYS_CFG, 0);
+        gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD_NOP);
+    }
+
 
     return GDBErrorNone;
 }
@@ -297,9 +326,9 @@ enum GDBError __gdbSendMessage(enum GDBDataType type, char* src, u32 len) {
 
 enum GDBError gdbSendMessage(enum GDBDataType type, char* src, u32 len) {
     OSMesg msg = 0;
-    osSendMesg(&gdbSerialSemaphore, msg, OS_MESG_BLOCK);
+    // osSendMesg(&gdbSerialSemaphore, msg, OS_MESG_BLOCK);
     enum GDBError result = __gdbSendMessage(type, src, len);
-    osRecvMesg(&gdbSerialSemaphore, &msg, OS_MESG_NOBLOCK);
+    // osRecvMesg(&gdbSerialSemaphore, &msg, OS_MESG_NOBLOCK);
     return result;
 }
 

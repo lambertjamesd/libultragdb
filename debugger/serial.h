@@ -27,9 +27,9 @@ enum GDBDataType {
 
 enum GDBError gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ);
 
-u8 gdbSerialCanRead();
-enum GDBError gdbSerialRead(char* target, u32 len);
-enum GDBError gdbSerialWrite(char* src, u32 len);
+extern u8 (*gdbSerialCanRead)();
+extern enum GDBError (*gdbSerialRead)(char* target, u32 len);
+extern enum GDBError (*gdbSerialWrite)(char* src, u32 len);
 
 enum GDBError gdbSendMessage(enum GDBDataType type, char* src, u32 len);
 
