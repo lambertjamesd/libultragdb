@@ -19,12 +19,6 @@ APP =		debugger.out
 
 TARGETS =	debugger.n64
 
-MAKEROM = /home/james/go/src/github.com/trhodeos/spicy/cmd/spicy/spicy \
-	--as_command=mips64-elf-as \
-	--cpp_command=cpp \
-	--ld_command=mips64-elf-ld \
-	--objcopy_command=mips64-elf-objcopy
-
 DEBUGGERHFILES = debugger/serial.h \
 	debugger/debugger.h
 
