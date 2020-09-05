@@ -271,17 +271,19 @@ server.on('connection', function(socket) {
         } else {
             gdbChunk = chunk;
         }
-
-        serialPortPromise.then(serialPort => {
-            // Ensure only complete gdb messages are sent
-            let messageEnd = findMessageEnd(gdbChunk);
-
-            while (messageEnd != -1 && messageEnd <= gdbChunk.length) {
-                serialPort.sendMessage(MESSAGE_TYPE_GDB, gdbChunk.slice(0, messageEnd));
-                gdbChunk = gdbChunk.slice(messageEnd);
-                messageEnd = findMessageEnd(gdbChunk);
-            }
-        });
+        
+        if (serialPortPromise) {
+            serialPortPromise.then(serialPort => {
+                // Ensure only complete gdb messages are sent
+                let messageEnd = findMessageEnd(gdbChunk);
+    
+                while (messageEnd != -1 && messageEnd <= gdbChunk.length) {
+                    serialPort.sendMessage(MESSAGE_TYPE_GDB, gdbChunk.slice(0, messageEnd));
+                    gdbChunk = gdbChunk.slice(messageEnd);
+                    messageEnd = findMessageEnd(gdbChunk);
+                }
+            });
+        }
     });
 
     socket.on('end', function() {

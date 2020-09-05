@@ -142,6 +142,7 @@ public	void	mainproc(void *arg)
   initcontroller();
   OSThread* threadPtr = &mainThread;
   enum GDBError err = gdbInitDebugger(handler, &n_dmaMessageQ, &threadPtr, 1);
+  // enum GDBError err = gdbSerialInit(handler, &n_dmaMessageQ);
   
   if (err != GDBErrorNone) {
     sprintf(gTmpBuffer, "Error initializing debugger %d", err);

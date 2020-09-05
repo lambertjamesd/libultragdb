@@ -205,9 +205,9 @@ u8 gdbSerialCanRead_cen64() {
 }
 
 enum GDBError gdbSerialRead_cen64(char* target, u32 len) {
-    // while (len--) {
-    //     *target++ = *((volatile u32*)(0xA0000000 | 0x18000000));
-    // }
+    while (len--) {
+        *target++ = *((volatile u32*)(0xA0000000 | 0x18000000));
+    }
     return GDBErrorNone;
 }
 
@@ -249,7 +249,6 @@ enum GDBError gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ)
         gdbWriteReg(GDB_EV_REGISTER_SYS_CFG, 0);
         gdbWriteReg(GDB_EV_REGISTER_USB_CFG, USB_CMD_RD_NOP);
     }
-
 
     return GDBErrorNone;
 }
