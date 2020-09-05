@@ -291,7 +291,6 @@ enum GDBError __gdbSendMessage(enum GDBDataType type, char* src, u32 len) {
         len -= firstChunkLength;
 
         while (len >= GDB_USB_SERIAL_SIZE) {
-            println("Sending full chunk");
             if ((int)src == ((int)src & !0x7)) {
                 err = gdbSerialWrite(src, GDB_USB_SERIAL_SIZE);
             } else {
