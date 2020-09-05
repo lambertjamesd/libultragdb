@@ -67,6 +67,8 @@ function formatMessage(type, buffer) {
 
 function onDataCallback(result) {
     return function(chunk) {
+        console.log('chunk', chunk);
+
         let currentReadMessage;
 
         if (currentReadMessage) {
@@ -174,6 +176,7 @@ function createTCPConnection(address, onReceiveMessage) {
         const parts = address.split(':', 2);
         const socket = net.createConnection(+parts[1], parts[0]);
 
+        
         const result = {
             sendMessage: (type, buffer) => {
                 const message = formatMessage(type, buffer);
@@ -187,6 +190,8 @@ function createTCPConnection(address, onReceiveMessage) {
                 socket.destroy();
             },
         };
+
+        result.sendMessage(1, Buffer.from('hello world', 'utf-8'));
 
         socket.on('connect', () => {
             console.log(`Connected to ${address}`);
@@ -202,6 +207,8 @@ function createTCPConnection(address, onReceiveMessage) {
         resolve(result);
     });
 }
+
+createTCPConnection('localhost:2159', console.log);
 
 server.listen(port, function() {
     console.log(`Debugger listening on:${port}`);

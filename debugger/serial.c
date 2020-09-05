@@ -201,7 +201,7 @@ enum GDBError gdbSerialWrite_X7(char* src, u32 len) {
 }
 
 u8 gdbSerialCanRead_cen64() {
-    return 1;
+    return *((volatile u32*)(0xA0000000 | 0x18000004));
 }
 
 enum GDBError gdbSerialRead_cen64(char* target, u32 len) {
@@ -222,7 +222,7 @@ enum GDBError gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ)
 {
     gdbSerialHandle = *handler;
 
-    volatile u32* cen64Check = (volatile u32*)(0xA0000000 | 0x18000004);
+    volatile u32* cen64Check = (volatile u32*)(0xA0000000 | 0x18000008);
     if (*cen64Check == 0xcece) {
         gdbSerialCanRead = gdbSerialCanRead_cen64;
         gdbSerialRead = gdbSerialRead_cen64;
