@@ -141,8 +141,7 @@ public	void	mainproc(void *arg)
   n_WaitMesg(retrace);
   initcontroller();
   OSThread* threadPtr = &mainThread;
-  // enum GDBError err = gdbInitDebugger(handler, &n_dmaMessageQ, &threadPtr, 1);
-  enum GDBError err = gdbSerialInit(handler, &n_dmaMessageQ);
+  enum GDBError err = gdbInitDebugger(handler, &n_dmaMessageQ, &threadPtr, 1);
   
   if (err != GDBErrorNone) {
     sprintf(gTmpBuffer, "Error initializing debugger %d", err);
@@ -160,15 +159,8 @@ public	void	mainproc(void *arg)
     trig = lastbutton & (lastbutton & ~trig);
     hold = lastbutton;
 
-    while (gdbSerialCanRead()) {
-      char data;
-      gdbSerialRead(&data, 1);
-      gdbSerialWrite(&data, 1);
-      sprintf(gTmpBuffer, "%c", data);
-      println(gTmpBuffer);
-    }
-
     if (trig) {
+      println("stopping at breakpoint!");
       // gdbSetWatchPoint(textGrid, 1, 1);
       gdbBreak();
     }

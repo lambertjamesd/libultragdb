@@ -878,8 +878,15 @@ enum GDBError gdbInitDebugger(OSPiHandle* handler, OSMesgQueue* dmaMessageQ, OST
     osCreateThread(&gdbDebuggerThread, GDB_DEBUGGER_THREAD_ID, gdbDebuggerLoop, NULL, gdbDebuggerThreadStack + GDB_STACKSIZE/sizeof(u64), 11);
     osStartThread(&gdbDebuggerThread);
 
+    // The main thread needs to be paused before interrupts work
+    // I'm not sure why
     if (primaryThread != NULL) {
-        osStopThread(primaryThread);
+        // Getting the debugger working with cen64 invovles skipping
+        // this.
+        // I'm not sure why
+        if (gdbCartType != GDBCartTypeCen64) {
+            osStopThread(primaryThread);
+        }
         gdbBreak();
     }
     

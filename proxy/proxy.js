@@ -66,17 +66,15 @@ function formatMessage(type, buffer) {
 }
 
 function onDataCallback(result) {
+    let currentReadMessage;
     return function(chunk) {
-        console.log('chunk', chunk);
-
-        let currentReadMessage;
 
         if (currentReadMessage) {
             currentReadMessage = Buffer.concat([currentReadMessage, chunk]);
         } else {
             currentReadMessage = chunk;
         }
-    
+
         let messageStart = currentReadMessage.indexOf('DMA@');
     
         // check if a message header exists and there is a minimum amount of data
@@ -191,8 +189,6 @@ function createTCPConnection(address, onReceiveMessage) {
             },
         };
 
-        result.sendMessage(1, Buffer.from('hello world', 'utf-8'));
-
         socket.on('connect', () => {
             console.log(`Connected to ${address}`);
         });
@@ -207,8 +203,6 @@ function createTCPConnection(address, onReceiveMessage) {
         resolve(result);
     });
 }
-
-createTCPConnection('localhost:2159', console.log);
 
 server.listen(port, function() {
     console.log(`Debugger listening on:${port}`);

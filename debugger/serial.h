@@ -23,6 +23,12 @@ enum GDBDataType {
     GDBDataTypeGDB,
 };
 
+enum GDBCartType {
+    GDBCartTypeNone,
+    GDBCartTypeX7,
+    GDBCartTypeCen64,
+};
+
 #define GDB_USB_SERIAL_SIZE 512
 
 enum GDBError gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ);
@@ -30,6 +36,7 @@ enum GDBError gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ);
 extern u8 (*gdbSerialCanRead)();
 extern enum GDBError (*gdbSerialRead)(char* target, u32 len);
 extern enum GDBError (*gdbSerialWrite)(char* src, u32 len);
+extern enum GDBCartType gdbCartType;
 
 enum GDBError gdbSendMessage(enum GDBDataType type, char* src, u32 len);
 

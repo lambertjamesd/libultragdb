@@ -57,6 +57,7 @@ static char gdbFooterText[] = "CMPH";
 u8 (*gdbSerialCanRead)();
 enum GDBError (*gdbSerialRead)(char* target, u32 len);
 enum GDBError (*gdbSerialWrite)(char* src, u32 len);
+enum GDBCartType gdbCartType;
 
 enum GDBEVRegister {
     GDB_EV_REGISTER_USB_CFG = 0x0004,
@@ -227,10 +228,12 @@ enum GDBError gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ)
         gdbSerialCanRead = gdbSerialCanRead_cen64;
         gdbSerialRead = gdbSerialRead_cen64;
         gdbSerialWrite = gdbSerialWrite_cen64;
+        gdbCartType = GDBCartTypeCen64;
     } else {
         gdbSerialCanRead = gdbSerialCanRead_X7;
         gdbSerialRead = gdbSerialRead_X7;
         gdbSerialWrite = gdbSerialWrite_X7;
+        gdbCartType = GDBCartTypeX7;
 
         gdbSerialHandle.latency = 0x04;
         gdbSerialHandle.pulse = 0x0C;
