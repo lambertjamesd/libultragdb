@@ -41,8 +41,6 @@ static OSMesgQueue* __gdbDmaMessageQ;
 
 #define USB_MIN_SIZE            16
 
-extern void println(char* text);
-
 // used to ensure that the memory buffers are aligned to 8 bytes
 long long __gdbAlignAndFlags;
 char gdbSerialSendBuffer[GDB_USB_SERIAL_SIZE];
@@ -283,7 +281,6 @@ enum GDBError __gdbSendMessage(enum GDBDataType type, char* src, u32 len) {
     } else {
         // header partially fits
         if (GDB_USB_SERIAL_SIZE > MESSAGE_HEADER_SIZE + firstChunkLength) {
-            println("Partial header");
             memcpy(gdbSerialSendBuffer + MESSAGE_HEADER_SIZE + firstChunkLength, gdbFooterText, GDB_USB_SERIAL_SIZE - MESSAGE_HEADER_SIZE - firstChunkLength);
         }
 

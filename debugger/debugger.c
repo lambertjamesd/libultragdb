@@ -96,8 +96,6 @@ static int gdbSignals[32] = {
     0, // reserved
 };
 
-void println(char* text);
-
 u32 gdbGetFaultAddress(OSThread* thread) {
     if (thread->context.cause & GDB_BRANCH_DELAY) {
         // pc points to a branch instruction
@@ -618,9 +616,6 @@ enum GDBError gdbHandleQuery(char* commandStart, char *packetEnd) {
         }
     }
 
-    println("Unknown q packet");
-    println(commandStart);
-
     return gdbSendMessage(GDBDataTypeGDB, "$#00", strlen("$#00"));
 }
 
@@ -687,9 +682,6 @@ enum GDBError gdbHandleV(char* commandStart, char *packetEnd) {
         gdbRunFlags &= ~GDB_IS_ATTACHED;
         return gdbSendMessage(GDBDataTypeGDB, "$OK#9a", strlen("$OK#9a"));
     }
-
-    println("Unknown v packet");
-    println(commandStart);
 
     return gdbSendMessage(GDBDataTypeGDB, "$#00", strlen("$#00"));
 }
@@ -763,9 +755,6 @@ enum GDBError gdbHandlePacket(char* commandStart, char *packetEnd) {
         }
     }
 
-    println("Unknown packet");
-    println(commandStart);
-
     return gdbSendMessage(GDBDataTypeGDB, "$#00", strlen("$#00"));
 }
 
@@ -824,7 +813,12 @@ void gdbErrorHandler(s16 code, s16 numArgs, ...) {
 }
 
 void gdbDebuggerLoop(void *arg) {
+    OSMesg msg;
     osCreateMesgQueue(&gdbPollMesgQ, &gdbPollMesgQMessage, 1);
+
+    // give time for the main thead to hit the starting breakpiont
+    osSetTimer(&gdbPollTimer, GDB_POLL_DELAY, 0, &gdbPollMesgQ, NULL);
+    osRecvMesg(&gdbPollMesgQ, &msg, OS_MESG_BLOCK);
 
     gdbRunFlags |= GDB_IS_ATTACHED;
     while (gdbRunFlags & GDB_IS_ATTACHED) {
@@ -838,7 +832,6 @@ void gdbDebuggerLoop(void *arg) {
             }
 
             int i;
-            OSMesg msg;
             // while program is running, decrease polling rate
             osRecvMesg(&gdbPollMesgQ, &msg, OS_MESG_BLOCK);
 
@@ -881,12 +874,7 @@ enum GDBError gdbInitDebugger(OSPiHandle* handler, OSMesgQueue* dmaMessageQ, OST
     // The main thread needs to be paused before interrupts work
     // I'm not sure why
     if (primaryThread != NULL) {
-        // Getting the debugger working with cen64 invovles skipping
-        // this.
-        // I'm not sure why
-        if (gdbCartType != GDBCartTypeCen64) {
-            osStopThread(primaryThread);
-        }
+        osStopThread(primaryThread);
         gdbBreak();
     }
     
