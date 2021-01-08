@@ -1,7 +1,64 @@
 
-#include <ultra64.h>
-#include <string.h>
 #include "serial.h"
+
+u8 (*gdbSerialCanRead)();
+
+#if USE_UNF_LOADER
+#include "usb.h"
+
+u32 gdbPendingUNFHeader;
+u32 gdbPendingUNFData;
+
+u8 gdbSerialCanRead_UNF() {
+    if (gdbPendingUNFHeader == 0) {
+        gdbPendingUNFHeader = usb_poll();
+    }
+
+    return gdbPendingUNFHeader != 0;
+}
+
+enum GDBError gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ) {
+    usb_initialize();
+    gdbSerialCanRead = gdbSerialCanRead_UNF;
+    return GDBErrorNone;
+}
+
+enum GDBError gdbSendMessage(enum GDBDataType type, char* src, u32 len) {
+    usb_write(type, src, len);
+    return GDBErrorNone;
+}
+
+enum GDBError gdbPollHeader(enum GDBDataType* type, u32* len) {
+    if (gdbSerialCanRead_UNF()) {
+        *type = USBHEADER_GETTYPE(gdbPendingUNFHeader);
+        gdbPendingUNFData = USBHEADER_GETSIZE(gdbPendingUNFHeader);
+        *len = gdbPendingUNFData;
+        gdbPendingUNFHeader = 0;
+        return GDBErrorNone;
+    } else {
+        return GDBErrorUSBNoData;
+    }
+}
+
+enum GDBError gdbReadData(char* target, u32 len, u32* dataRead) {
+    if (len > gdbPendingUNFData) {
+        len = gdbPendingUNFData;
+    }
+    gdbPendingUNFData -= len;
+    usb_read(target, len);
+    *dataRead = len;
+}
+
+enum GDBError gdbFinishRead() {
+    usb_skip(gdbPendingUNFData);
+    gdbPendingUNFData = 0;
+}
+
+#else // USE_UNF_LOADER
+
+#include <string.h>
+
+#define GDB_USB_SERIAL_SIZE 512
 
 static OSMesgQueue* __gdbDmaMessageQ;
 
@@ -52,7 +109,6 @@ static OSMesg gdbSerialSemaphoreMsg;
 static char gdbHeaderText[] = "DMA@";
 static char gdbFooterText[] = "CMPH";
 
-u8 (*gdbSerialCanRead)();
 enum GDBError (*gdbSerialRead)(char* target, u32 len);
 enum GDBError (*gdbSerialWrite)(char* src, u32 len);
 enum GDBCartType gdbCartType;
@@ -60,6 +116,7 @@ enum GDBCartType gdbCartType;
 enum GDBEVRegister {
     GDB_EV_REGISTER_USB_CFG = 0x0004,
     GDB_EV_REGISTER_USB_TIMER = 0x000C,
+    GDB_EV_REGISTER_VERSION = 0x0014,
     GDB_EV_REGISTER_USB_DATA = 0x0400,
     GDB_EV_REGISTER_SYS_CFG = 0x8000,
     GDB_EV_REGISTER_KEY = 0x8004,
@@ -323,6 +380,8 @@ enum GDBError __gdbSendMessage(enum GDBDataType type, char* src, u32 len) {
 }
 
 enum GDBError gdbSendMessage(enum GDBDataType type, char* src, u32 len) {
+    // usb_write(type, src, len);
+    // return GDBErrorNone;
     OSMesg msg = 0;
     // osSendMesg(&gdbSerialSemaphore, msg, OS_MESG_BLOCK);
     enum GDBError result = __gdbSendMessage(type, src, len);
@@ -456,3 +515,5 @@ enum GDBError gdbFinishRead() {
     }
     return GDBErrorNone;
 }
+
+#endif // USE_UNF_LOADER

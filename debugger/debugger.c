@@ -212,6 +212,16 @@ char* gdbReadHex(u8* target, char* src, u32 maxBytes) {
     return src;
 }
 
+void* gdbTranslateAddr(void* in) {
+    u32 physicalAddr = osVirtualToPhysical(in);
+
+    if (physicalAddr >= osMemSize) {
+        return 0;
+    } else {
+        return (void*)(PHYS_TO_K0(physicalAddr));
+    }
+}
+
 void gdbCopy(char* dst, char* src, int len)
 {
     while (len)
@@ -475,7 +485,7 @@ enum GDBError gdbReplyMemory(char* commandStart, char *packetEnd) {
         ++lenText;
     }
 
-    u8* dataSrc = (u8*)gdbParseHex(commandStart + 1, 4);
+    u8* dataSrc = gdbTranslateAddr((u8*)gdbParseHex(commandStart + 1, 4));
     u32 len = gdbParseHex(lenText + 1, 4);
 
     if ((u32)dataSrc < K0BASE) {
@@ -535,9 +545,11 @@ enum GDBError gdbWriteMemory(char *commandStart, char* packetEnd) {
 
     ++dataText;
 
-    u8* dataTarget = (u8*)gdbParseHex(commandStart + 1, 4);
-    u32 len = gdbParseHex(lenText + 1, 4);
-    gdbReadHex(dataTarget, dataText, len);
+    u8* dataTarget = gdbTranslateAddr((u8*)gdbParseHex(commandStart + 1, 4));
+    if (dataTarget) {
+        u32 len = gdbParseHex(lenText + 1, 4);
+        gdbReadHex(dataTarget, dataText, len);
+    }
     __gdbSetWatch(prevWatch);
     return gdbSendMessage(GDBDataTypeGDB, "$OK#9a", strlen("$OK#9a"));
 }
