@@ -22,6 +22,7 @@ APP =		debugger.out
 TARGETS =	debugger.n64
 
 DEBUGGERHFILES = debugger/serial.h \
+	debugger/rsp.h \
 	debugger/debugger.h
 
 HFILES =	$(DEBUGGERHFILES) example/graph.h \
@@ -29,6 +30,7 @@ HFILES =	$(DEBUGGERHFILES) example/graph.h \
 	example/thread.h
 
 DEBUGGERFILES = debugger/serial.c \
+	debugger/rsp.c \
 	debugger/debugger.c
 
 CODEFILES   = $(DEBUGGERFILES) example/nu64sys.c \

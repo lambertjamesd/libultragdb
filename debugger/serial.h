@@ -1,6 +1,6 @@
 
-#ifndef __SERIAL_H
-#define __SERIAL_H
+#ifndef __LIBULTRA_GDB_SERIAL_H
+#define __LIBULTRA_GDB_SERIAL_H
 
 #include <ultra64.h>
 

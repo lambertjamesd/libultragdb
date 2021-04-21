@@ -8,6 +8,7 @@ beginseg
 	include "codesegment.o"
 	include "$(ROOT)/usr/lib/PR/rspboot.o"
 	include "$(ROOT)/usr/lib/PR/gspFast3D.o"
+	include "debugger/dump_rsp_state.o"
 endseg
 
 beginseg

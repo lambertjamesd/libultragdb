@@ -1,6 +1,6 @@
 
-#ifndef __DEBUGGER_H
-#define __DEBUGGER_H
+#ifndef __LIBULTRA_GDB_DEBUGGER_H
+#define __LIBULTRA_GDB_DEBUGGER_H
 
 #include <ultra64.h>
 #include "serial.h"
