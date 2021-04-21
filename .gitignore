@@ -3,3 +3,4 @@
 *.n64
 .vscode/*
 core
+bin/

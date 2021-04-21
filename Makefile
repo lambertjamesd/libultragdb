@@ -2,6 +2,8 @@
 
 include $(ROOT)/usr/include/make/PRdefs
 
+RSP2DWARF = /home/james/go/src/github.com/lambertjamesd/rsp2dwarf/rsp2dwarf
+
 FINAL = YES
 
 ifeq ($(FINAL), YES)
@@ -49,6 +51,13 @@ LCOPTS =	-mno-shared -G 0
 LDFLAGS =	$(MKDEPOPT) -L$(ROOT)/usr/lib $(N64LIB) -L$(N64_LIBGCCDIR) -L$(N64_NEWLIBDIR) -lgcc -lc
 
 LDIRT  =	$(APP)
+
+bin/dump_rsp_state bin/dump_rsp_state.dat: debugger/dump_rsp_state.s
+	mkdir -p bin/rsp
+	rspasm -o bin/dump_rsp_state debugger/dump_rsp_state.s
+
+debugger/dump_rsp_state.o: bin/dump_rsp_state bin/dump_rsp_state.dat
+	$(RSP2DWARF) bin/dump_rsp_state -o debugger/dump_rsp_state.o -n dump_rsp_state
 
 default:	$(TARGETS)
 

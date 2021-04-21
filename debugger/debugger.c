@@ -213,12 +213,18 @@ char* gdbReadHex(u8* target, char* src, u32 maxBytes) {
 }
 
 void* gdbTranslateAddr(void* in) {
-    u32 physicalAddr = osVirtualToPhysical(in);
+    u32 physicalAddr = (u32)in;
 
-    if (physicalAddr >= osMemSize) {
-        return 0;
+    if ((physicalAddr & 0xFF000000) == 0x04000000 || (physicalAddr & 0xFF000000) == 0xA4000000) {
+        return (void*)(PHYS_TO_K1(physicalAddr & 0x0FFFFFFF));
     } else {
-        return (void*)(PHYS_TO_K0(physicalAddr));
+        physicalAddr = osVirtualToPhysical(in);
+
+        if (physicalAddr >= osMemSize) {
+            return 0;
+        } else {
+            return (void*)(PHYS_TO_K0(physicalAddr));
+        }
     }
 }
 
@@ -485,31 +491,14 @@ enum GDBError gdbReplyMemory(char* commandStart, char *packetEnd) {
         ++lenText;
     }
 
-    u8* dataSrc = gdbTranslateAddr((u8*)gdbParseHex(commandStart + 1, 4));
+    vu32* dataSrc = (vu32*)gdbTranslateAddr((u8*)gdbParseHex(commandStart + 1, 4));
     u32 len = gdbParseHex(lenText + 1, 4);
 
-    if ((u32)dataSrc < K0BASE) {
-        while ((u32)dataSrc < K0BASE && len > 0) {
-            *current++ = '0';
-            *current++ = '0';
-            ++dataSrc;
-            --len;
-        }
-    }
-
-    if (len > 0) {
-        u32 maxLen;
-        if ((u32)dataSrc < osMemSize + K0BASE) {
-            maxLen = (osMemSize + K0BASE) - (u32)dataSrc;
-        }
-
-        if (len > maxLen) {
-            len = maxLen;
-        }
-
-        char* strEnd = gdbWriteHex(current, dataSrc, len);
-
-        current = strEnd;
+    while (len > 0) {
+        u32 word = *dataSrc;
+        current = gdbWriteHex(current, (u8*)&word, sizeof(u32));
+        len -= sizeof(u32);
+        ++dataSrc;
     }
 
     *current++ = '#';
@@ -655,6 +644,7 @@ enum GDBError gdbHandleV(char* commandStart, char *packetEnd) {
             while ((thread = gdbNextThread(thread, threadId))) {
                 switch (commandStart[6])
                 {
+                case 'C':
                 case 'c':
                 {
                     gdbResumeThread(thread);
@@ -848,7 +838,8 @@ void gdbDebuggerLoop(void *arg) {
             osRecvMesg(&gdbPollMesgQ, &msg, OS_MESG_BLOCK);
 
             for (i = 0; i < MAX_DEBUGGER_THREADS; ++i) {
-                if (gdbTargetThreads[i] && (gdbTargetThreads[i]->flags & OS_FLAG_FAULT)) {
+                if (gdbTargetThreads[i] && (gdbTargetThreads[i]->flags & OS_FLAG_FAULT ||
+                    gdbTargetThreads[i]->state == OS_STATE_STOPPED)) {
                     gdbRunFlags &= ~GDB_IS_WAITING_STOP;
                     gdbSendStopReply(gdbTargetThreads[i]);
                     break;
