@@ -35,7 +35,7 @@ int rspIsBranch(u32 instruction)
         // BEQ BNE BLEZ BGTZ
         (opcode & 0xF0FF) == 0x1000 ||
         // BGEZ BGEZAL BLTZ BLTZAL
-        opcode == 0x0400 && (
+        (opcode == 0x0400 && (
             regimm == 0x01 || 
             regimm == 0x11 ||
             regimm == 0x00 ||
@@ -45,7 +45,7 @@ int rspIsBranch(u32 instruction)
             (instruction & 0x3F) == 0x08
         ) &&
         // J
-        opcode == 0x0800 ||
+        opcode == 0x0800) ||
         // JAL
         opcode == 0x0C00) {
         return 1;

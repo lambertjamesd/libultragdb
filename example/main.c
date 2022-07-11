@@ -35,7 +35,6 @@ static int      controller;
 static int      lastx;
 static int      lasty;
 static int      lastbutton = 0;
-static u32 	seed =1;
 
 /*
  *  Handler
@@ -119,14 +118,13 @@ void start_display(void)
 
 u32 __gdbGetWatch();
 
-static long long __align;
-char gTmpBuffer[0x1000];
+char __attribute__((aligned(8))) gTmpBuffer[0x1000];
 
 extern OSThread mainThread;
 
 public	void	mainproc(void *arg)
 {
-  u16	trig, hold;
+  u16	trig;
   int	frame;
 
   handler = osCartRomInit();
@@ -157,16 +155,12 @@ public	void	mainproc(void *arg)
     trig = lastbutton;
     readControllers();
     trig = lastbutton & (lastbutton & ~trig);
-    hold = lastbutton;
 
     if (trig) {
       println("stopping at breakpoint!");
       // gdbSetWatchPoint(textGrid, 1, 1);
       gdbBreak();
     }
-
-    enum GDBDataType dataType;
-    u32 chunkSize;
 
     if (++healthcheck > 200) {
       healthcheck = 0;

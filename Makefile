@@ -4,22 +4,12 @@ include $(ROOT)/usr/include/make/PRdefs
 
 RSP2DWARF = /home/james/go/src/github.com/lambertjamesd/rsp2dwarf/rsp2dwarf
 
-FINAL = YES
-
-ifeq ($(FINAL), YES)
 OPTIMIZER       = -O2
-OPTIMIZER       = -g
-LCDEFS          = -DNDEBUG -D_FINALROM -DF3DEX_GBI_2
-N64LIB          = -lultra_rom
-else
-OPTIMIZER       = -g
-LCDEFS          = -DDEBUG -DF3DEX_GBI_2
-N64LIB          = -lultra_d
-endif
+LCDEFS			:= -DDEBUG -g -Isrc/ -I/usr/include/n64/nustd -Werror -Wall
+N64LIB			:= -lultra_rom -lnustd
 
-APP =		debugger.out
-
-TARGETS =	debugger.n64
+APP =		build/debugger.out
+TARGETS =	build/debugger.n64
 
 DEBUGGERHFILES = debugger/serial.h \
 	debugger/rsp.h \
@@ -38,28 +28,48 @@ CODEFILES   = $(DEBUGGERFILES) example/nu64sys.c \
 	example/graph.c \
 	example/asci.c
 
-CODEOBJECTS =	$(CODEFILES:.c=.o)
+ASMFILES    =	asm/entry.s asm/rom_header.s
+
+ASMOBJECTS  =	$(patsubst %.s, build/%.o, $(ASMFILES))
+
+CODEOBJECTS =	$(CODEFILES:%.c=build/%.o)
 
 DATAFILES   =	example/cfb.c
 
-DATAOBJECTS =	$(DATAFILES:.c=.o)
+DATAOBJECTS =	$(DATAFILES:%.c=build/%.o)
 
 CODESEGMENT =	codesegment.o
 
-OBJECTS =	$(CODESEGMENT) $(DATAOBJECTS)
+BOOT		=	/usr/lib/n64/PR/bootcode/boot.6102
+BOOT_OBJ	=	build/boot.6102.o
+
+OBJECTS =	$(CODESEGMENT) $(DATAOBJECTS) $(ASMOBJECTS) $(BOOT_OBJ)
 
 LCINCS =	-I. -I$(ROOT)/usr/include/PR -I $(ROOT)/usr/include
 LCOPTS =	-mno-shared -G 0
-LDFLAGS =	$(MKDEPOPT) -L$(ROOT)/usr/lib $(N64LIB) -L$(N64_LIBGCCDIR) -L$(N64_NEWLIBDIR) -lgcc -lc
+LDFLAGS =	-L/usr/lib/n64 $(N64LIB)  -L$(N64_LIBGCCDIR) -lgcc
 
 LDIRT  =	$(APP)
+
+build/%.o: %.c
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -MM $^ -MF "$(@:.o=.d)" -MT"$@"
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+build/asm/%.o: asm/%.s
+	@mkdir -p $(@D)
+	$(AS) -Wa,-Iasm -o $@ $<
 
 bin/dump_rsp_state bin/dump_rsp_state.dat: debugger/dump_rsp_state.s
 	mkdir -p bin/rsp
 	rspasm -o bin/dump_rsp_state debugger/dump_rsp_state.s
 
-debugger/dump_rsp_state.o: bin/dump_rsp_state bin/dump_rsp_state.dat
-	$(RSP2DWARF) bin/dump_rsp_state -o debugger/dump_rsp_state.o -n dump_rsp_state
+build/debugger/dump_rsp_state.o: bin/dump_rsp_state bin/dump_rsp_state.dat
+	@mkdir -p $(@D)
+	$(RSP2DWARF) bin/dump_rsp_state -o build/debugger/dump_rsp_state.o -n dump_rsp_state
+	
+$(BOOT_OBJ): $(BOOT)
+	$(OBJCOPY) -I binary -B mips -O elf32-bigmips $< $@
 
 default:	$(TARGETS)
 
@@ -68,14 +78,14 @@ include $(COMMONRULES)
 $(CODESEGMENT):	$(CODEOBJECTS)
 		$(LD) -o $(CODESEGMENT) -r $(CODEOBJECTS) $(LDFLAGS)
 
-ifeq ($(FINAL), YES)
-$(TARGETS) $(APP):      example/spec $(OBJECTS)
-	$(MAKEROM) -s 9 -r $(TARGETS) example/spec
-	makemask $(TARGETS)
-else
-$(TARGETS) $(APP):      example/spec $(OBJECTS)
-	$(MAKEROM) -r $(TARGETS) example/spec
-endif
+build/example/example.ld: example/example.ld
+	@mkdir -p $(@D)
+	cpp -P -Wno-trigraphs $(LCDEFS) -DCODE_SEGMENT=$(CODESEGMENT) -o $@ $<
 
-cleanall: clean
-	rm -f $(CODEOBJECTS) $(OBJECTS)
+$(TARGETS) $(APP): build/example/example.ld $(OBJECTS) build/debugger/dump_rsp_state.o
+	$(LD) -L. -T build/example/example.ld -Map build/debugger.map -o build/debugger.elf
+	$(OBJCOPY) --pad-to=0x100000 --gap-fill=0xFF build/debugger.elf build/debugger.n64 -O binary
+	makemask $(TARGETS)
+
+clean:
+	rm -rf build
