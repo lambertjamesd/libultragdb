@@ -38,7 +38,7 @@ enum GDBError gdbSerialInit(OSPiHandle* handler, OSMesgQueue* dmaMessageQ);
 enum GDBError gdbSendMessage(enum GDBDataType type, char* src, u32 len);
 
 enum GDBError gdbPollHeader(enum GDBDataType* type, u32* len);
-enum GDBError gdbReadData(char* target, u32 len, u32* dataRead);
+enum GDBError gdbReadData(volatile char* target, u32 len, u32* dataRead);
 enum GDBError gdbFinishRead();
 
 #endif

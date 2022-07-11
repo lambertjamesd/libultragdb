@@ -12,6 +12,12 @@ enum GDBBreakpointType {
     GDBBreakpointTypeUserUnapplied,
 };
 
+enum GDBHangCheck {
+    GDBHangCheckNone,
+    GDBHangCheckUnhealthy,
+    GDBHangCheckHealthy = 20
+};
+
 struct GDBBreakpoint {
     u32 addr;
     u32 prevValue;
@@ -56,5 +62,6 @@ void gdbSetWatchPoint(void* addr, int read, int write);
  * Removes the current watch point this is the same as doing gdbSetWatchPoint(0, 0, 0)
  */ 
 void gdbClearWatchPoint();
+void gdbHeartbeat();
 
 #endif

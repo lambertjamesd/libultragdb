@@ -7,7 +7,7 @@ RSP2DWARF = /home/james/go/src/github.com/lambertjamesd/rsp2dwarf/rsp2dwarf
 FINAL = YES
 
 ifeq ($(FINAL), YES)
-# OPTIMIZER       = -O2
+OPTIMIZER       = -O2
 OPTIMIZER       = -g
 LCDEFS          = -DNDEBUG -D_FINALROM -DF3DEX_GBI_2
 N64LIB          = -lultra_rom

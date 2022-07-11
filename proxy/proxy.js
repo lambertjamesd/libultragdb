@@ -92,7 +92,7 @@ function onDataCallback(result) {
                 }
     
                 if (footer.indexOf('CMPH') !== 0) {
-                    console.error(`Invalid message footer`);
+                    console.error(`Invalid message footer: full message ${currentReadMessage}`);
                 }
     
                 if (result.onReceiveMessage) {

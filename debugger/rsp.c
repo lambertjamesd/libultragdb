@@ -5,22 +5,72 @@
 extern char dump_rsp_stateTextStart[];
 extern char dump_rsp_stateTextEnd[];
 
-int rspDMABusy() {
+int rspDMABusy()
+{
     return IO_READ(SP_STATUS_REG) & (SP_STATUS_DMA_BUSY | SP_STATUS_DMA_FULL | SP_STATUS_IO_FULL);
 }
 
-void rspRamToDMEM(u32 rspAddr, void* srcMemory, u32 len) {
+void rspRamToDMEM(u32 rspAddr, void* srcMemory, u32 len)
+{
     IO_WRITE(SP_MEM_ADDR_REG, rspAddr);
     IO_WRITE(SP_DRAM_ADDR_REG, osVirtualToPhysical(srcMemory));
     IO_WRITE(SP_RD_LEN_REG, len - 1);
     while (rspDMABusy());
 }
 
-void rspDMEMtoRam(u32 rspAddr, void* dstMemory, u32 len) {
+void rspDMEMtoRam(u32 rspAddr, void* dstMemory, u32 len) 
+{
     IO_WRITE(SP_MEM_ADDR_REG, rspAddr);
     IO_WRITE(SP_DRAM_ADDR_REG, osVirtualToPhysical(dstMemory));
     IO_WRITE(SP_WR_LEN_REG, len - 1);
     while (rspDMABusy());
+}
+
+int rspIsBranch(u32 instruction)
+{
+    u32 opcode = (instruction & 0xFC000000) >> 16;
+    u32 regimm = (instruction & 0x1F0000) >> 16;
+
+    if (
+        // BEQ BNE BLEZ BGTZ
+        (opcode & 0xF0FF) == 0x1000 ||
+        // BGEZ BGEZAL BLTZ BLTZAL
+        opcode == 0x0400 && (
+            regimm == 0x01 || 
+            regimm == 0x11 ||
+            regimm == 0x00 ||
+            regimm == 0x10) &&
+        opcode == 0x0000 && (
+            (instruction & 0x3F) == 0x09 ||
+            (instruction & 0x3F) == 0x08
+        ) &&
+        // J
+        opcode == 0x0800 ||
+        // JAL
+        opcode == 0x0C00) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+u32 rspAdjustPCForRestart(u32 pc)
+{
+    if (pc == 0)
+    {
+        return pc;
+    }
+
+    u32 prevInstruction = IO_READ(SP_IMEM_START + pc - 4);
+
+    if (rspIsBranch(prevInstruction))
+    {
+        return pc - 4;
+    }
+    else
+    {
+        return pc;
+    }
 }
 
 void rspDumpState(struct RSPState* state, struct RSPWorkingMemory* workingMemory)
@@ -62,7 +112,7 @@ void rspDumpState(struct RSPState* state, struct RSPWorkingMemory* workingMemory
     // restore program and data
     rspRamToDMEM(SP_DMEM_START, workingMemory->data, RSP_DATA_DUMP_SIZE);
     rspRamToDMEM(SP_IMEM_START, workingMemory->text, RSP_DUMP_PROGRAM_SIZE);
-    IO_WRITE(SP_PC_REG, prevPC);
+    IO_WRITE(SP_PC_REG, rspAdjustPCForRestart(prevPC));
 
     u32 nextFlags = 0;
 
