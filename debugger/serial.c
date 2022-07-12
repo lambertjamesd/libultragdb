@@ -1,6 +1,27 @@
 
 #include "serial.h"
 
+#ifdef HAS_SCREEN_PRINT_DEBUG
+
+char gDebugMessageBuffer[512];
+
+char gHexDigits[] = "0123456789ABCDEF";
+
+void writeHexData(char* target, const char* src, int len) {
+    while (len > 0) {
+        --len;
+
+        *target++ = gHexDigits[(*src >> 4) & 0xF];
+        *target++ = gHexDigits[*src & 0xF];
+
+        ++src;
+    }
+
+    *target = '\0';
+}
+
+#endif
+
 u8 (*gdbSerialCanRead)();
 
 void memcpy_v(volatile void* dest, volatile const void* src, size_t count) {
@@ -129,9 +150,9 @@ static OSMesgQueue* __gdbDmaMessageQ;
 #define USB_MIN_SIZE            16
 
 // used to ensure that the memory buffers are aligned to 8 bytes
-long long __gdbAlignAndFlags;
-volatile char gdbSerialSendBuffer[GDB_USB_SERIAL_SIZE];
-volatile char gdbSerialReadBuffer[GDB_USB_SERIAL_SIZE];
+int gdbFlags;
+volatile char __attribute__((aligned(8))) gdbSerialSendBuffer[GDB_USB_SERIAL_SIZE];
+volatile char __attribute__((aligned(8))) gdbSerialReadBuffer[GDB_USB_SERIAL_SIZE];
 static OSPiHandle gdbSerialHandle;
 static OSMesgQueue gdbSerialSemaphore;
 static OSMesg gdbSerialSemaphoreMsg;
@@ -270,6 +291,7 @@ enum GDBError gdbSerialWrite_X7(char* src, u32 len) {
             chunkSize = len;
         }
         int baddr = GDB_USB_SERIAL_SIZE - chunkSize;
+
         err = gdbDMAWrite(src, REG_ADDR(GDB_EV_REGISTER_USB_DATA + baddr), chunkSize);
         if (err != GDBErrorNone) return err;
 
@@ -436,7 +458,7 @@ enum GDBError gdbPollHeader(enum GDBDataType* type, u32* len) {
         *len = gdbRemainingLen;
         gdbReadHead = MESSAGE_HEADER_SIZE;
         gdbMaxReadHead = USB_MIN_SIZE;
-        __gdbAlignAndFlags |= GDB_IS_READING;
+        gdbFlags |= GDB_IS_READING;
 
         // u32 dataWithLength = gdbRemainingLen + MESSAGE_HEADER_SIZE + MESSAGE_FOOTER_SIZE;
         return GDBErrorNone;
@@ -511,10 +533,10 @@ enum GDBError gdbReadData(volatile char* target, u32 len, u32* dataRead) {
     gdbRemainingLen -= len;
     *dataRead += len;
 
-    if (gdbRemainingLen == 0 && (__gdbAlignAndFlags & GDB_IS_READING)) {
+    if (gdbRemainingLen == 0 && (gdbFlags & GDB_IS_READING)) {
         gdbRemainingLen = MESSAGE_FOOTER_SIZE;
         // this prevents an infinite loop when reading the footer
-        __gdbAlignAndFlags &= ~GDB_IS_READING;
+        gdbFlags &= ~GDB_IS_READING;
         char footerCheck[4];
         u32 footerDataRead;
         err = gdbReadData(footerCheck, MESSAGE_FOOTER_SIZE, &footerDataRead);

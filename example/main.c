@@ -11,8 +11,8 @@
 #include	"graph.h"
 #include  "../debugger/debugger.h"
 
-extern u16	cfb_16_a[];
-extern u16	cfb_16_b[];
+u16	__attribute__((aligned(64))) cfb_16_a[SCREEN_WD*SCREEN_HT];
+u16 __attribute__((aligned(64))) cfb_16_b[SCREEN_WD*SCREEN_HT];
 
 u16	*cfb_tbl[2] = {
   cfb_16_a, cfb_16_b
@@ -121,11 +121,24 @@ u32 __gdbGetWatch();
 char __attribute__((aligned(8))) gTmpBuffer[0x1000];
 
 extern OSThread mainThread;
+static int frame;
+
+void displayConsoleLog() {
+    int line;
+
+    for (line = 0; line < NUM_LINES; ++line)
+    {
+      printstr(white, 5, 2 + NUM_LINES - line, textGrid[(line + nextLineIndex) % NUM_LINES]);
+    }
+
+    osWritebackDCacheAll();
+    osViSwapBuffer( cfb_tbl[frame] );
+    frame ^= 1;
+}
 
 public	void	mainproc(void *arg)
 {
   u16	trig;
-  int	frame;
 
   handler = osCartRomInit();
   frame = 0;
@@ -138,6 +151,11 @@ public	void	mainproc(void *arg)
   osViBlack(0);
   n_WaitMesg(retrace);
   initcontroller();
+
+  sprintf(gTmpBuffer, "Connecting debugger");
+  println(gTmpBuffer);
+  displayConsoleLog();
+
   OSThread* threadPtr = &mainThread;
   enum GDBError err = gdbInitDebugger(handler, &n_dmaMessageQ, &threadPtr, 1);
   
@@ -167,15 +185,6 @@ public	void	mainproc(void *arg)
       println("heartbeat");
     }
 
-    int line;
-
-    for (line = 0; line < NUM_LINES; ++line)
-    {
-      printstr(white, 5, 2 + NUM_LINES - line, textGrid[(line + nextLineIndex) % NUM_LINES]);
-    }
-
-    osWritebackDCacheAll();
-    osViSwapBuffer( cfb_tbl[frame] );
-    frame ^= 1;
+    displayConsoleLog();
   }
 }  

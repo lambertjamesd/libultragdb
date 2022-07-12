@@ -4,6 +4,15 @@
 
 #include <ultra64.h>
 
+#ifdef HAS_SCREEN_PRINT_DEBUG
+
+void println(char* message);
+void displayConsoleLog();
+extern char gDebugMessageBuffer[512];
+void writeHexData(char* target, const char* src, int len);
+
+#endif
+
 // #define USE_UNF_LOADER  1
 
 enum GDBError {

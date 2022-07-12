@@ -67,8 +67,8 @@ public	OSMesgQueue	cartMessageQ;
 private	OSMesg		cartMessageBuf;
 
 
-extern	u32		cfb_16_a[];
-extern	u32		cfb_16_b[];
+extern __attribute__((aligned(64)))	u32		cfb_16_a[];
+extern __attribute__((aligned(64)))	u32		cfb_16_b[];
 
 
 /*---------------------------------------------------------------------*

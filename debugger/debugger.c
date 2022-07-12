@@ -48,8 +48,6 @@ static char gdbOutputBuffer[MAX_PACKET_SIZE];
 static int gdbRunFlags;
 static int gdbQuickPollCount;
 
-static char gdbMessageBuffer[128];
-
 static OSThread gdbDebuggerThread;
 static u64 gdbDebuggerThreadStack[GDB_STACKSIZE/sizeof(u64)];
 
@@ -559,8 +557,6 @@ enum GDBError gdbWriteMemory(char *commandStart, char* packetEnd) {
 }
 
 enum GDBError gdbHandleQuery(char* commandStart, char *packetEnd) {
-    gdbSendMessage(GDBDataTypeText, gdbMessageBuffer, sprintf(gdbMessageBuffer, "Handling Query %.*s", packetEnd - commandStart, commandStart));
-                
     if (strStartsWith(commandStart, "qSupported")) {
         strcpy(gdbOutputBuffer, "$PacketSize=4000;vContSupported+;swbreak+#");
         return gdbSendMessage(GDBDataTypeGDB, gdbOutputBuffer, gdbApplyChecksum(gdbOutputBuffer));
@@ -792,11 +788,8 @@ enum GDBError gdbCheckForPacket() {
         err = gdbFinishRead();
         if (err != GDBErrorNone) return err;
 
-        gdbSendMessage(GDBDataTypeText, gdbMessageBuffer, sprintf(gdbMessageBuffer, "Received message of type %d %s", type, gdbPacketBuffer));
-
         if (type == GDBDataTypeGDB) {
             if (*gdbPacketBuffer == 0x03) {
-                gdbSendMessage(GDBDataTypeText, gdbMessageBuffer, sprintf(gdbMessageBuffer, "Stop interrupt recieved"));
                 if (gdbRunFlags & GDB_IS_WAITING_STOP) {
                     OSThread* targetThread = gdbFindThread(GDB_ANY_THREAD);
 
@@ -809,8 +802,6 @@ enum GDBError gdbCheckForPacket() {
             } else {
                 err = gdbParsePacket(gdbPacketBuffer, len, &commandStart, &packetEnd);
                 if (err != GDBErrorNone) return err;
-
-                gdbSendMessage(GDBDataTypeText, gdbMessageBuffer, sprintf(gdbMessageBuffer, "Received Command %.*s", packetEnd - commandStart, commandStart));
 
                 err = gdbSendMessage(GDBDataTypeGDB, "+", strlen("+"));
                 if (err != GDBErrorNone) return err;
@@ -834,9 +825,6 @@ void gdbErrorHandler(s16 code, s16 numArgs, ...) {
     );
 }
 
-extern u16* cfb1;
-extern u16* cfb2;
-
 void gdbDebuggerLoop(void *arg) {
     OSMesg msg;
     osCreateMesgQueue(&gdbPollMesgQ, &gdbPollMesgQMessage, 1);
@@ -851,7 +839,6 @@ void gdbDebuggerLoop(void *arg) {
         while (gdbCheckForPacket() == GDBErrorNone);
 
         if (gdbRunFlags & GDB_IS_WAITING_STOP) {
-            gdbSendMessage(GDBDataTypeText, gdbMessageBuffer, sprintf(gdbMessageBuffer, "Waiting for Stop"));
             osSetTimer(&gdbPollTimer, gdbQuickPollCount ? GDB_QUICK_POLL_DELAY : GDB_POLL_DELAY, 0, &gdbPollMesgQ, NULL);
 
             if (gdbQuickPollCount > 0) {
@@ -878,6 +865,10 @@ void gdbDebuggerLoop(void *arg) {
                 }
             }
         }
+
+#ifdef HAS_SCREEN_PRINT_DEBUG
+        displayConsoleLog();
+#endif
     }
     osDestroyThread(&gdbDebuggerThread);
 }

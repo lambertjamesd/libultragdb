@@ -34,16 +34,12 @@ ASMOBJECTS  =	$(patsubst %.s, build/%.o, $(ASMFILES))
 
 CODEOBJECTS =	$(CODEFILES:%.c=build/%.o)
 
-DATAFILES   =	example/cfb.c
-
-DATAOBJECTS =	$(DATAFILES:%.c=build/%.o)
-
 CODESEGMENT =	codesegment.o
 
 BOOT		=	/usr/lib/n64/PR/bootcode/boot.6102
 BOOT_OBJ	=	build/boot.6102.o
 
-OBJECTS =	$(CODESEGMENT) $(DATAOBJECTS) $(ASMOBJECTS) $(BOOT_OBJ)
+OBJECTS =	$(CODESEGMENT) $(ASMOBJECTS) $(BOOT_OBJ)
 
 LCINCS =	-I. -I$(ROOT)/usr/include/PR -I $(ROOT)/usr/include
 LCOPTS =	-mno-shared -G 0

@@ -63,13 +63,6 @@ SECTIONS
 
    . = 0x80200000;
 
-   BEGIN_SEG(cfb, __romPos)
-   {
-      build/example/cfb.o(.data);
-      build/example/cfb.o(.bss);
-   }
-   END_SEG(cfb)
-
    /* Discard everything not specifically mentioned above. */
    /DISCARD/ :
    {

@@ -88,7 +88,12 @@ void putchr(u16 color, int curs_x, int curs_y, char c)
   int	i, j;
   int	x = curs_x*CHAR_WD;
   int	y = curs_y*CHAR_HT;
-  u8	*pc = pat[c-0x20];
+  u8	*pc;
+  if (c < 0x20) {
+    pc = pat[0];
+  } else {
+    pc = pat[c-0x20];
+  }
   u16	*p = (u16 *)osViGetNextFramebuffer() + x + SCREEN_WD*(y-8);
 
   for (j = 0; j < CHAR_HT; j ++, pc++) {
