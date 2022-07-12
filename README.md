@@ -2,8 +2,6 @@
 
 Allows for debugging over a flashcart serial port using GDB. This library is designed to use threads and at the moment only supports libultra. It uses the same protocol as [UNFLoader](https://github.com/buu342/N64-UNFLoader) to communicate. 
 
-As of now only Everdrive X7 and a custom fork of [cen64](https://github.com/lambertjamesd/cen64) are supported.
-
 ## Getting Started
 
 You need to include the [debugger](https://github.com/lambertjamesd/libultragdb/tree/master/debugger) folder in your project and at the start of your program call.
@@ -89,67 +87,38 @@ Program received signal SIGINT, Interrupt.
 
 ## VSCode Plugins
 
-I use vscode and have tried these plugins for visual debugging.
+I recommend this plugin for debugging
 
-[vGDB](https://marketplace.visualstudio.com/items?itemName=penagos.vgdb)
+[GDB Debugger - Beyond](https://marketplace.visualstudio.com/items?itemName=coolchyni.beyond-debug)
 
 [Native Debug](https://marketplace.visualstudio.com/items?itemName=webfreak.debug)
 
-These are the targets I have in `launch.json` to enable for these plugins.
+These are the targets I have in `launch.json` to enable these plugins.
+
+Where `Run EV delay` is a task that uploads the rom `build/debugger.n64` to the flash cart
+and waits a short delay for the game to load be ready for the debugger to connect.
+
 
 ```JavaScript
         {
-            "type": "vgdb",
-            "request": "attach",
-            "name": "Run with ED vgdb",
-            "debugger": "gdb-multiarch",
-            "program": "${workspaceFolder}/debugger.out",
-            "startupCmds": [
-                "set arch mips:4300",
-                "target remote localhost:8080",
-                "c",
-            ],
-            // Optional: you will need to add a task that uploads
-            // the rom to the flash cart depend on that
-            "preLaunchTask": "Upload to EV",
-        },
-        {
-            "type": "gdb",
-            "request": "attach",
-            "name": "Run with ED",
-            "executable": "${workspaceFolder}/debugger.out",
-            "target": ":8080",
-            "remote": true,
-            "gdbpath": "gdb-multiarch",
-            "autorun": [
-                "set arch mips:4300",
-            ],
+            "type": "by-gdb",
+            "request": "launch",
+            "name": "Debug with EV",
+            "program": "${workspaceFolder}/build/debugger.elf",
             "cwd": "${workspaceRoot}",
-            // Optional: you will need to add a task that uploads
-            // the rom to the flash cart depend on that
-            "preLaunchTask": "Upload to EV",
+            "debuggerPath": "gdb-multiarch",
+            "remote": {
+                "enabled": true,
+                "address": ":8080",
+                "mode": "remote",
+                "execfile": "${workspaceFolder}/build/debugger.elf"
+            },
+            "commandsBeforeExec": [
+                "set arch mips:4300",
+            ],
+            "preLaunchTask": "Run EV delay",
         },
 ```
-
-## Using cen64
-
-I have a fork of [cen64](https://github.com/lambertjamesd/cen64) that you can use with this debugger as well. To use it you will need to clone the repo, install dependencies, and build it.
-
-```bash
-git clone https://github.com/lambertjamesd/cen64.git
-cd cen64
-cmake ./
-make
-```
-See the cen64 repo page for information on dependencies you need to install if you are getting build errors.
-
-This fork of cen64 will do nothing when it first runs. You need to connect to it first. To do this, change the command line arguments to `proxy.js` when you run it.
-
-```
-node proxy/proxy.js localhost:2159 8080 -k
-```
-
-This has proxy connect to the cen64 fork instead of the dev cart. Once cen64 and proxy.js are running. You can run GDB as detailed above either in the command line or with a IDE plugin.
 
 ## Potential Questions 
 
@@ -167,10 +136,14 @@ That means you either didn't compile debugging symbols in the compile step or th
 Here is the code in question
 
 ```
-    if (gdbCartType != GDBCartTypeCen64) {
+    if (primaryThread != NULL) {
         osStopThread(primaryThread);
+        gdbBreak();
     }
-    gdbBreak();
 ```
 
 For some reason the Native Debug vscode plugin immediatly continues after connecting but thinks that the program is still paused. It is only upon reaching the second `gdbBreak` breakpoint that it will pause and the debugger will work properly. You also may be wondering why even have the debugger pause at all and let it continue right after connecting. Well for some reason both vs code debugger plugins wont let me interrupt execution if I don't first stop at that breakpoint.
+
+## Cen64
+
+This debugger does work with a special fork of cen64 but a much better solution is to use cen64's built in gdb debugger. More details can be found here [Debugging with GDB](https://github.com/n64dev/cen64/blob/master/gdb/gdb.md)
