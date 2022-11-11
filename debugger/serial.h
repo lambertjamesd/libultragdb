@@ -32,6 +32,7 @@ enum GDBDataType {
     GDBDataTypeRawBinary,
     GDBDataTypeScreenshot,
     GDBDataTypeGDB,
+    GDBDataTypeControllerData,
 };
 
 enum GDBCartType {

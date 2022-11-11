@@ -6,9 +6,18 @@ const fs = require('fs');
 let verbose = false;
 let keepAlive = false;
 let eagerSerial = false;
+let controllerOutputPath = null;
+
+let prevArg = '';
+
+let controllerOutputFile = null;
 
 const args = Array.from(process.argv).slice(2).filter(arg => {
-    if (arg[0] == '-') {
+    if (prevArg) {
+        if (prevArg == '--controller-data') {
+            controllerOutputPath = arg;
+        }
+    } else if (arg[0] == '-') {
         switch (arg) {
             case '-v':
             case '--verbose':
@@ -21,6 +30,9 @@ const args = Array.from(process.argv).slice(2).filter(arg => {
             case '-e':
             case '--eager':
                 eagerSerial = true;
+                break;
+            case '--controller-data':
+                prevArg = arg;
                 break;
             default:
                 console.error(`Unrecongized argument ${arg}`);
@@ -210,6 +222,7 @@ server.listen(port, function() {
 
 const MESSAGE_TYPE_TEXT = 1;
 const MESSAGE_TYPE_GDB = 4;
+const MESSAGE_TYPE_CONTROLLER = 5;
 
 let serialPortPromise;
 let activeSocket;
@@ -224,6 +237,26 @@ function openSerialConnection() {
                 case MESSAGE_TYPE_GDB:
                     if (activeSocket) { 
                         activeSocket.write(message.data);
+                    }
+                    break;
+                case MESSAGE_TYPE_CONTROLLER:
+                    if (controllerOutputFile) {
+                        fs.write(controllerOutputFile, `
+{
+    .contPad = {
+        .button = 0x${message.data.readUInt16BE(0).toString(16)},
+        .stick_x = ${message.data.readInt8(2)},
+        .stick_y = ${message.data.readInt8(3)},
+        .errno = ${message.data.readUInt8(4)},
+    }
+},                       
+`, (err) => {
+                            if (err) {
+                                console.error(err);
+                            }
+                        });
+                    } else {
+                        console.error(`Recieved controller data but no output file is specifie`);
                     }
                     break;
             }
@@ -264,6 +297,17 @@ server.on('connection', function(socket) {
 
     activeSocket = socket;
     
+    if (controllerOutputPath) {
+        console.log(`Writing controller data to ${controllerOutputPath}`);
+        fs.open(controllerOutputPath, 'w', (err, fd) => {
+            if (err) {
+                console.error(err);
+            } else {
+                controllerOutputFile = fd;
+            }
+        });
+    }
+    
     openSerialConnection();
 
     socket.on('data', function(chunk) {
@@ -291,6 +335,11 @@ server.on('connection', function(socket) {
         console.log('Debugger connection closed');
         serialPortPromise.then(serialPort => serialPort.close());
         serialPortPromise = null;
+
+        if (controllerOutputFile) {
+            fs.close(controllerOutputFile);
+            controllerOutputFile = null;
+        }
 
         if (!keepAlive) {
             server.close();
