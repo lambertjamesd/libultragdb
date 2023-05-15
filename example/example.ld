@@ -36,13 +36,11 @@ SECTIONS
       CODE_SEGMENT(.text);
       /usr/lib/n64/PR/rspboot.o(.text);
       /usr/lib/n64/PR/gspFast3D.o(.text);
-      build/debugger/dump_rsp_state.o(.text);
 
       /* data */
       CODE_SEGMENT(.data*);
       /usr/lib/n64/PR/rspboot.o(.data*);
       /usr/lib/n64/PR/gspFast3D.o(.data*);
-      build/debugger/dump_rsp_state.o(.data*);
 
       /* rodata */
       CODE_SEGMENT(.rodata*);

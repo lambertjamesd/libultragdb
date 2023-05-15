@@ -774,8 +774,8 @@ enum GDBError gdbHandlePacket(char* commandStart, char *packetEnd) {
 }
 
 enum GDBError gdbCheckForPacket() {
-    char* commandStart;
-    char* packetEnd;
+    char* commandStart = 0;
+    char* packetEnd = 0;
 
     if (gdbSerialCanRead()) {
         enum GDBDataType type;

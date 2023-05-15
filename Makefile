@@ -12,16 +12,16 @@ APP =		build/debugger.out
 TARGETS =	build/debugger.n64
 
 DEBUGGERHFILES = debugger/serial.h \
-	debugger/rsp.h \
 	debugger/debugger.h
+# debugger/rsp.h \
 
 HFILES =	$(DEBUGGERHFILES) example/graph.h \
 	example/nu64sys.h \
 	example/thread.h
 
 DEBUGGERFILES = debugger/serial.c \
-	debugger/rsp.c \
 	debugger/debugger.c
+# debugger/rsp.c \
 
 CODEFILES   = $(DEBUGGERFILES) example/nu64sys.c \
 	example/main.c \
@@ -56,13 +56,13 @@ build/asm/%.o: asm/%.s
 	@mkdir -p $(@D)
 	$(AS) -Wa,-Iasm -o $@ $<
 
-bin/dump_rsp_state bin/dump_rsp_state.dat: debugger/dump_rsp_state.s
-	mkdir -p bin/rsp
-	rspasm -o bin/dump_rsp_state debugger/dump_rsp_state.s
+# bin/dump_rsp_state bin/dump_rsp_state.dat: debugger/dump_rsp_state.s
+# 	mkdir -p bin/rsp
+# 	rspasm -o bin/dump_rsp_state debugger/dump_rsp_state.s
 
-build/debugger/dump_rsp_state.o: bin/dump_rsp_state bin/dump_rsp_state.dat
-	@mkdir -p $(@D)
-	$(RSP2DWARF) bin/dump_rsp_state -o build/debugger/dump_rsp_state.o -n dump_rsp_state
+# build/debugger/dump_rsp_state.o: bin/dump_rsp_state bin/dump_rsp_state.dat
+# 	@mkdir -p $(@D)
+# 	$(RSP2DWARF) bin/dump_rsp_state -o build/debugger/dump_rsp_state.o -n dump_rsp_state
 	
 $(BOOT_OBJ): $(BOOT)
 	$(OBJCOPY) -I binary -B mips -O elf32-bigmips $< $@
@@ -78,7 +78,7 @@ build/example/example.ld: example/example.ld
 	@mkdir -p $(@D)
 	cpp -P -Wno-trigraphs $(LCDEFS) -DCODE_SEGMENT=$(CODESEGMENT) -o $@ $<
 
-$(TARGETS) $(APP): build/example/example.ld $(OBJECTS) build/debugger/dump_rsp_state.o
+$(TARGETS) $(APP): build/example/example.ld $(OBJECTS)
 	$(LD) -L. -T build/example/example.ld -Map build/debugger.map -o build/debugger.elf
 	$(OBJCOPY) --pad-to=0x100000 --gap-fill=0xFF build/debugger.elf build/debugger.n64 -O binary
 	makemask $(TARGETS)
